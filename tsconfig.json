@@ -3,6 +3,7 @@
     "noEmit": true,
     "module": "nodenext",
     "moduleResolution": "nodenext",
+    "types": ["@webgpu/types"],
     "allowImportingTsExtensions": true,
     "esModuleInterop": true
   }

@@ -9,6 +9,7 @@
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@webgpu/types": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {
