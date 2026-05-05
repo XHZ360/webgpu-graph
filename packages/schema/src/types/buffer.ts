@@ -7,7 +7,7 @@ export interface BufferBindingSchema {
   usage: BufferUsageFlags;
   type: "storage" | "uniform" | "index" | "vertex";
   contentType?: BufferContentType;
-  initialData?: number[];
+  initialData?: number[] | ArrayBuffer | ArrayBufferView;
   mappable?: boolean;
 }
 
@@ -23,7 +23,7 @@ export function createStorageBufferSchema(
   return {
     name,
     size,
-    usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST,
+    usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST | BUFFER_USAGE.COPY_SRC,
     type: "storage",
     ...opts,
   };

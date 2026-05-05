@@ -1,8 +1,8 @@
 import type { BufferBindingSchema } from "../types/buffer.ts";
 import type { BindGroupLayoutSchema, BindGroupSchema } from "../types/binding.ts";
 import type { ShaderSchema } from "../types/shader.ts";
-import type { ComputePipelineSchema } from "../types/pipeline.ts";
-import type { ComputePassSchema } from "../types/pass.ts";
+import type { PipelineSchema } from "../types/pipeline.ts";
+import type { PassSchema } from "../types/pass.ts";
 import type { RenderGraphSchema } from "../types/renderGraph.ts";
 import type { WebGpuSimulationSchema } from "../types/simulation.ts";
 
@@ -11,8 +11,8 @@ export class DefaultSchemaBuilder {
   private bindGroupLayouts = new Map<string, BindGroupLayoutSchema>();
   private bindGroups = new Map<string, BindGroupSchema>();
   private shaders = new Map<string, ShaderSchema>();
-  private pipelines = new Map<string, ComputePipelineSchema>();
-  private passes = new Map<string, ComputePassSchema>();
+  private pipelines = new Map<string, PipelineSchema>();
+  private passes = new Map<string, PassSchema>();
   private renderGraphs = new Map<string, RenderGraphSchema>();
   private _mainGraphRef: string | undefined;
 
@@ -48,7 +48,7 @@ export class DefaultSchemaBuilder {
     return this;
   }
 
-  addPipeline(pipeline: ComputePipelineSchema): this {
+  addPipeline(pipeline: PipelineSchema): this {
     if (this.pipelines.has(pipeline.name)) {
       throw new Error(`Duplicate pipeline: ${pipeline.name}`);
     }
@@ -56,7 +56,7 @@ export class DefaultSchemaBuilder {
     return this;
   }
 
-  addPass(pass: ComputePassSchema): this {
+  addPass(pass: PassSchema): this {
     if (this.passes.has(pass.name)) {
       throw new Error(`Duplicate pass: ${pass.name}`);
     }

@@ -5,12 +5,30 @@ export function checkMissingReferences(schema: WebGpuSimulationSchema): Validati
   const errors: ValidationError[] = [];
 
   for (const [pipelineName, pipeline] of Object.entries(schema.pipelines)) {
-    if (!schema.shaders[pipeline.shader]) {
-      errors.push({
-        rule: "MISSING_REF",
-        message: `Pipeline "${pipelineName}" references shader "${pipeline.shader}" which does not exist`,
-        path: `pipelines.${pipelineName}.shader`,
-      });
+    if (pipeline.type === "compute") {
+      if (!schema.shaders[pipeline.shader]) {
+        errors.push({
+          rule: "MISSING_REF",
+          message: `Pipeline "${pipelineName}" references shader "${pipeline.shader}" which does not exist`,
+          path: `pipelines.${pipelineName}.shader`,
+        });
+      }
+    }
+    if (pipeline.type === "render") {
+      if (!schema.shaders[pipeline.vertexShader]) {
+        errors.push({
+          rule: "MISSING_REF",
+          message: `Pipeline "${pipelineName}" references vertexShader "${pipeline.vertexShader}" which does not exist`,
+          path: `pipelines.${pipelineName}.vertexShader`,
+        });
+      }
+      if (pipeline.fragmentShader && !schema.shaders[pipeline.fragmentShader]) {
+        errors.push({
+          rule: "MISSING_REF",
+          message: `Pipeline "${pipelineName}" references fragmentShader "${pipeline.fragmentShader}" which does not exist`,
+          path: `pipelines.${pipelineName}.fragmentShader`,
+        });
+      }
     }
     for (const ref of pipeline.bindGroups) {
       if (!schema.bindGroupLayouts[ref.layout]) {

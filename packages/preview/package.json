@@ -16,7 +16,11 @@
     "test": "vp test",
     "check": "vp check"
   },
+  "dependencies": {
+    "schema": "workspace:*"
+  },
   "devDependencies": {
+    "@webgpu/types": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"

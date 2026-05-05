@@ -16,6 +16,9 @@
     "test": "vp test",
     "check": "vp check"
   },
+  "dependencies": {
+    "schema": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "vite-plus": "catalog:",

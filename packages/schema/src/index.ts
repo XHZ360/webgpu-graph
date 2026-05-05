@@ -17,9 +17,19 @@ export type {
 } from "./types/binding.ts";
 export { createBindingSchema, createBindGroupLayoutSchema } from "./types/binding.ts";
 export type { ShaderSchema, WorkgroupSize } from "./types/shader.ts";
-export type { ComputePipelineSchema } from "./types/pipeline.ts";
+export type {
+  ComputePipelineSchema,
+  RenderPipelineSchema,
+  PipelineSchema,
+} from "./types/pipeline.ts";
 export type {
   ComputePassSchema,
+  RenderPassSchema,
+  RenderPassAttachmentSchema,
+  VertexBufferBindingRef,
+  IndexBufferBindingRef,
+  DrawCommand,
+  PassSchema,
   DispatchValue,
   DispatchExpression,
   SchemaExecutionContext,
@@ -39,3 +49,5 @@ export type {
 export { DefaultSchemaBuilder } from "./builder/index.ts";
 export { DefaultSchemaValidator } from "./validator/index.ts";
 export type { ValidationError, ValidationResult, ValidationRule } from "./validator/index.ts";
+export { DefaultSchemaFactory } from "./factory/index.ts";
+export type { FactoryResources } from "./factory/index.ts";

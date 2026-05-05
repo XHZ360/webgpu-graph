@@ -8,6 +8,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./examples/pbf-simulation": "./src/examples/pbf-simulation.ts",
+    "./visualization": "./src/visualization/index.ts",
     "./package.json": "./package.json"
   },
   "scripts": {

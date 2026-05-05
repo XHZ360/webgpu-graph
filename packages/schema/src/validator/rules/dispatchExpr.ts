@@ -27,6 +27,7 @@ export function checkDispatchExpressionValidity(schema: WebGpuSimulationSchema):
   const errors: ValidationError[] = [];
 
   for (const [passName, pass] of Object.entries(schema.passes)) {
+    if (pass.type !== "compute") continue;
     if (typeof pass.dispatch === "number") continue;
     if (Array.isArray(pass.dispatch)) continue;
 

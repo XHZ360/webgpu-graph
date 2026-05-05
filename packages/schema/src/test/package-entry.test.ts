@@ -12,7 +12,7 @@ describe("schema package entry", () => {
     expect(new DefaultSchemaBuilder()).toBeInstanceOf(DefaultSchemaBuilder);
     expect(new DefaultSchemaValidator()).toBeInstanceOf(DefaultSchemaValidator);
     expect(createStorageBufferSchema("positions", 64).usage).toBe(
-      BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST,
+      BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST | BUFFER_USAGE.COPY_SRC,
     );
   });
 });
