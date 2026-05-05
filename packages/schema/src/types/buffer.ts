@@ -1,4 +1,5 @@
 import type { BufferContentType, BufferUsageFlags } from "./basic.ts";
+import { BUFFER_USAGE } from "./basic.ts";
 
 export interface BufferBindingSchema {
   name: string;
@@ -22,7 +23,7 @@ export function createStorageBufferSchema(
   return {
     name,
     size,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST,
     type: "storage",
     ...opts,
   };
@@ -39,7 +40,7 @@ export function createUniformBufferSchema(
   return {
     name,
     size,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    usage: BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST,
     type: "uniform",
     ...opts,
   };
@@ -49,7 +50,7 @@ export function createIndexBufferSchema(name: string, size: number): BufferBindi
   return {
     name,
     size,
-    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+    usage: BUFFER_USAGE.INDEX | BUFFER_USAGE.COPY_DST,
     type: "index",
   };
 }
@@ -65,7 +66,7 @@ export function createVertexBufferSchema(
   return {
     name,
     size,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    usage: BUFFER_USAGE.VERTEX | BUFFER_USAGE.COPY_DST,
     type: "vertex",
     ...opts,
   };

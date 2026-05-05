@@ -1,4 +1,5 @@
 export type { BufferContentType, BufferUsageFlags } from "./types/basic.ts";
+export { BUFFER_USAGE, SHADER_STAGE } from "./types/basic.ts";
 export type { BufferBindingSchema } from "./types/buffer.ts";
 export {
   createStorageBufferSchema,
@@ -34,3 +35,7 @@ export type {
   PassesSchemaMap,
   RenderGraphsSchemaMap,
 } from "./types/simulation.ts";
+
+export { DefaultSchemaBuilder } from "./builder/index.ts";
+export { DefaultSchemaValidator } from "./validator/index.ts";
+export type { ValidationError, ValidationResult, ValidationRule } from "./validator/index.ts";
