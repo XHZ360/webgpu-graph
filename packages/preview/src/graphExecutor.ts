@@ -80,6 +80,9 @@ export class GraphExecutor {
       return context.evaluateDispatch(pass.dispatch.expr);
     }
 
+    context?.reportError?.(
+      `Compute pass "${pass.name}" requires dispatch expression evaluation but no evaluator was provided. Falling back to 1.`,
+    );
     return 1;
   }
 

@@ -8,7 +8,10 @@
     "build": "tsc && vp build",
     "preview": "vp preview"
   },
-  "dependencies": {},
+  "dependencies": {
+    "preview": "workspace:*",
+    "schema": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "vite": "catalog:",

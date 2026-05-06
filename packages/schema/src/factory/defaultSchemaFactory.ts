@@ -204,6 +204,7 @@ export class DefaultSchemaFactory {
     pipeline: ComputePipelineSchema,
     device: GPUDevice,
     shaderModules: Map<string, GPUShaderModule>,
+    schema: WebGpuSimulationSchema,
     bindGroupLayouts: Map<string, GPUBindGroupLayout>,
   ): GPUComputePipeline {
     const shader = shaderModules.get(pipeline.shader);
@@ -213,11 +214,18 @@ export class DefaultSchemaFactory {
       );
     }
 
+    const shaderSchema = schema.shaders[pipeline.shader];
+    if (!shaderSchema) {
+      throw new Error(
+        `Pipeline "${pipeline.name}" references shader "${pipeline.shader}" which is not present in schema`,
+      );
+    }
+
     const pipelineLayout = this.createPipelineLayout(pipeline, device, bindGroupLayouts);
 
     return device.createComputePipeline({
       layout: pipelineLayout,
-      compute: { module: shader, entryPoint: "main" },
+      compute: { module: shader, entryPoint: shaderSchema.entryPoint },
     });
   }
 
@@ -225,6 +233,7 @@ export class DefaultSchemaFactory {
     pipeline: RenderPipelineSchema,
     device: GPUDevice,
     shaderModules: Map<string, GPUShaderModule>,
+    schema: WebGpuSimulationSchema,
     bindGroupLayouts: Map<string, GPUBindGroupLayout>,
   ): GPURenderPipeline {
     const vertexShader = shaderModules.get(pipeline.vertexShader);
@@ -234,13 +243,20 @@ export class DefaultSchemaFactory {
       );
     }
 
+    const vertexShaderSchema = schema.shaders[pipeline.vertexShader];
+    if (!vertexShaderSchema) {
+      throw new Error(
+        `Pipeline "${pipeline.name}" references vertexShader "${pipeline.vertexShader}" which is not present in schema`,
+      );
+    }
+
     const pipelineLayout = this.createPipelineLayout(pipeline, device, bindGroupLayouts);
 
     const descriptor: GPURenderPipelineDescriptor = {
       layout: pipelineLayout,
       vertex: {
         module: vertexShader,
-        entryPoint: "main",
+        entryPoint: vertexShaderSchema.entryPoint,
         buffers: pipeline.vertexInput.buffers,
       },
       primitive: pipeline.primitive ?? {
@@ -257,9 +273,16 @@ export class DefaultSchemaFactory {
         );
       }
 
+      const fragmentShaderSchema = schema.shaders[pipeline.fragmentShader];
+      if (!fragmentShaderSchema) {
+        throw new Error(
+          `Pipeline "${pipeline.name}" references fragmentShader "${pipeline.fragmentShader}" which is not present in schema`,
+        );
+      }
+
       descriptor.fragment = {
         module: fragShader,
-        entryPoint: "main",
+        entryPoint: fragmentShaderSchema.entryPoint,
         targets: pipeline.fragmentOutput?.targets ?? [],
       };
     }
@@ -291,12 +314,12 @@ export class DefaultSchemaFactory {
       if (pipeline.type === "compute") {
         computePipelines.set(
           name,
-          this.createComputePipeline(pipeline, device, shaderModules, bindGroupLayouts),
+          this.createComputePipeline(pipeline, device, shaderModules, schema, bindGroupLayouts),
         );
       } else {
         renderPipelines.set(
           name,
-          this.createRenderPipeline(pipeline, device, shaderModules, bindGroupLayouts),
+          this.createRenderPipeline(pipeline, device, shaderModules, schema, bindGroupLayouts),
         );
       }
     }

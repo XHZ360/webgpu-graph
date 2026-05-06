@@ -26,7 +26,230 @@ const GRID_WIDTH = 32;
 const GRID_HEIGHT = 16;
 const MAX_PARTICLES_PER_CELL = 100;
 const MAX_NEIGHBORS = 100;
+const WORKGROUP_SIZE = 128;
+const SIM_PARAMS_FLOAT_COUNT = 36;
 const SIM_PARAMS_SIZE = 36 * 4; // 36 floats = 144 bytes
+
+const INITIAL_PARTICLE_COLUMNS = 60;
+const INITIAL_PARTICLE_ROWS = 20;
+
+export const PBF_NUM_PARTICLES = NUM_PARTICLES;
+export const PBF_GRID_WIDTH = GRID_WIDTH;
+export const PBF_GRID_HEIGHT = GRID_HEIGHT;
+export const PBF_MAX_PARTICLES_PER_CELL = MAX_PARTICLES_PER_CELL;
+export const PBF_MAX_NEIGHBORS = MAX_NEIGHBORS;
+export const PBF_WORKGROUP_SIZE = WORKGROUP_SIZE;
+export const PBF_SIM_PARAMS_FLOAT_COUNT = SIM_PARAMS_FLOAT_COUNT;
+export const PBF_SIM_PARAMS_SIZE = SIM_PARAMS_SIZE;
+
+export const PBF_SIMULATION_METADATA = Object.freeze({
+  particleCount: PBF_NUM_PARTICLES,
+  gridWidth: PBF_GRID_WIDTH,
+  gridHeight: PBF_GRID_HEIGHT,
+  maxParticlesPerCell: PBF_MAX_PARTICLES_PER_CELL,
+  maxNeighbors: PBF_MAX_NEIGHBORS,
+  workgroupSize: PBF_WORKGROUP_SIZE,
+  simParamsFloatCount: PBF_SIM_PARAMS_FLOAT_COUNT,
+  simParamsSize: PBF_SIM_PARAMS_SIZE,
+});
+
+export interface PbfSimulationParams {
+  particleCount: number;
+  gridWidth: number;
+  gridHeight: number;
+  maxParticlesPerCell: number;
+  maxNeighbors: number;
+  timeDelta: number;
+  h: number;
+  rho0: number;
+  lambdaEpsilon: number;
+  boundaryX: number;
+  boundaryY: number;
+  particleRadiusInWorld: number;
+  epsilon: number;
+  mass: number;
+  neighborRadius: number;
+  corrDeltaQCoeff: number;
+  corrK: number;
+  poly6Factor: number;
+  spikyGradFactor: number;
+  cellReciprocal: number;
+  boundaryMode: number;
+  boundaryCenterX: number;
+  viscosityEnabled: number;
+  viscosityC: number;
+  boundaryCenterY: number;
+  boundaryHalfHeight: number;
+  boundaryBezierNeckWidth: number;
+  boundaryBezierTopWidth: number;
+  boundaryBezierBottomWidth: number;
+  inertialAccelX: number;
+  inertialAccelY: number;
+  gravityX: number;
+  gravityY: number;
+  velocityDamping: number;
+}
+
+export interface PbfInitialParticleState {
+  positions: Float32Array;
+  oldPositions: Float32Array;
+  velocities: Float32Array;
+}
+
+function computePoly6Factor(h: number): number {
+  return 315 / (64 * Math.PI * Math.pow(h, 9));
+}
+
+function computeSpikyGradFactor(h: number): number {
+  return -45 / (Math.PI * Math.pow(h, 6));
+}
+
+// These defaults are chosen conservatively for a deterministic demo reset path.
+// They are internally consistent with the WGSL layout and grid dimensions even
+// though the original runtime constants are not available in this package.
+export const PBF_DEFAULT_SIMULATION_PARAMS: Readonly<PbfSimulationParams> = Object.freeze({
+  particleCount: PBF_NUM_PARTICLES,
+  gridWidth: PBF_GRID_WIDTH,
+  gridHeight: PBF_GRID_HEIGHT,
+  maxParticlesPerCell: PBF_MAX_PARTICLES_PER_CELL,
+  maxNeighbors: PBF_MAX_NEIGHBORS,
+  timeDelta: 1 / 120,
+  h: 0.1,
+  rho0: 1,
+  lambdaEpsilon: 100,
+  boundaryX: 4,
+  boundaryY: 2,
+  particleRadiusInWorld: 0.02,
+  epsilon: 1e-5,
+  mass: 1,
+  neighborRadius: 0.1,
+  corrDeltaQCoeff: 0.3,
+  corrK: 0.001,
+  poly6Factor: computePoly6Factor(0.1),
+  spikyGradFactor: computeSpikyGradFactor(0.1),
+  cellReciprocal: 8,
+  boundaryMode: 0,
+  boundaryCenterX: 2,
+  viscosityEnabled: 1,
+  viscosityC: 0.03,
+  boundaryCenterY: 1,
+  boundaryHalfHeight: 0.85,
+  boundaryBezierNeckWidth: 1.8,
+  boundaryBezierTopWidth: 3.2,
+  boundaryBezierBottomWidth: 3.2,
+  inertialAccelX: 0,
+  inertialAccelY: 0,
+  gravityX: 0,
+  gravityY: -1.2,
+  velocityDamping: 0.99,
+});
+
+function resolvePbfSimulationParams(
+  overrides: Partial<PbfSimulationParams> = {},
+): PbfSimulationParams {
+  const params = {
+    ...PBF_DEFAULT_SIMULATION_PARAMS,
+    ...overrides,
+  };
+
+  return {
+    ...params,
+    poly6Factor: overrides.poly6Factor ?? computePoly6Factor(params.h),
+    spikyGradFactor: overrides.spikyGradFactor ?? computeSpikyGradFactor(params.h),
+    cellReciprocal: overrides.cellReciprocal ?? params.gridWidth / params.boundaryX,
+    boundaryCenterX: overrides.boundaryCenterX ?? params.boundaryX * 0.5,
+    boundaryCenterY: overrides.boundaryCenterY ?? params.boundaryY * 0.5,
+    boundaryHalfHeight: overrides.boundaryHalfHeight ?? params.boundaryY * 0.425,
+    boundaryBezierNeckWidth: overrides.boundaryBezierNeckWidth ?? params.boundaryX * 0.45,
+    boundaryBezierTopWidth: overrides.boundaryBezierTopWidth ?? params.boundaryX * 0.8,
+    boundaryBezierBottomWidth: overrides.boundaryBezierBottomWidth ?? params.boundaryX * 0.8,
+  };
+}
+
+export function createPbfInitialPositions(
+  overrides: Partial<PbfSimulationParams> = {},
+): Float32Array {
+  const params = resolvePbfSimulationParams(overrides);
+  const positions = new Float32Array(PBF_NUM_PARTICLES * 2);
+
+  const startX = Math.max(params.particleRadiusInWorld * 2, params.boundaryX * 0.14);
+  const startY = Math.max(params.particleRadiusInWorld * 2, params.boundaryY * 0.25);
+  const spacingX = (params.boundaryX - startX * 2) / (INITIAL_PARTICLE_COLUMNS - 1);
+  const spacingY = (params.boundaryY - startY * 2) / (INITIAL_PARTICLE_ROWS - 1);
+
+  for (let row = 0; row < INITIAL_PARTICLE_ROWS; row += 1) {
+    for (let col = 0; col < INITIAL_PARTICLE_COLUMNS; col += 1) {
+      const index = row * INITIAL_PARTICLE_COLUMNS + col;
+      const offset = index * 2;
+      positions[offset] = startX + col * spacingX;
+      positions[offset + 1] = startY + row * spacingY;
+    }
+  }
+
+  return positions;
+}
+
+export function createPbfInitialVelocities(): Float32Array {
+  return new Float32Array(PBF_NUM_PARTICLES * 2);
+}
+
+export function createPbfInitialParticleState(
+  overrides: Partial<PbfSimulationParams> = {},
+): PbfInitialParticleState {
+  const positions = createPbfInitialPositions(overrides);
+
+  return {
+    positions,
+    oldPositions: new Float32Array(positions),
+    velocities: createPbfInitialVelocities(),
+  };
+}
+
+export function packPbfSimulationParams(
+  overrides: Partial<PbfSimulationParams> = {},
+): Float32Array {
+  const params = resolvePbfSimulationParams(overrides);
+  const packed = new Float32Array(PBF_SIM_PARAMS_FLOAT_COUNT);
+
+  packed[0] = params.particleCount;
+  packed[1] = params.gridWidth;
+  packed[2] = params.gridHeight;
+  packed[3] = params.maxParticlesPerCell;
+  packed[4] = params.maxNeighbors;
+  packed[5] = 0;
+  packed[6] = params.timeDelta;
+  packed[7] = params.h;
+  packed[8] = params.rho0;
+  packed[9] = params.lambdaEpsilon;
+  packed[10] = params.boundaryX;
+  packed[11] = params.boundaryY;
+  packed[12] = params.particleRadiusInWorld;
+  packed[13] = params.epsilon;
+  packed[14] = params.mass;
+  packed[15] = params.neighborRadius;
+  packed[16] = params.corrDeltaQCoeff;
+  packed[17] = params.corrK;
+  packed[18] = params.poly6Factor;
+  packed[19] = params.spikyGradFactor;
+  packed[20] = params.cellReciprocal;
+  packed[21] = 0;
+  packed[22] = params.boundaryMode;
+  packed[23] = params.boundaryCenterX;
+  packed[24] = params.viscosityEnabled;
+  packed[25] = params.viscosityC;
+  packed[26] = params.boundaryCenterY;
+  packed[27] = params.boundaryHalfHeight;
+  packed[28] = params.boundaryBezierNeckWidth;
+  packed[29] = params.boundaryBezierTopWidth;
+  packed[30] = params.boundaryBezierBottomWidth;
+  packed[31] = params.inertialAccelX;
+  packed[32] = params.inertialAccelY;
+  packed[33] = params.gravityX;
+  packed[34] = params.gravityY;
+  packed[35] = params.velocityDamping;
+
+  return packed;
+}
 
 // ============================================================================
 // WGSL 着色器源码
@@ -232,7 +455,7 @@ const shaderPrologue: ShaderSchema = {
   source: `
 ${sharedBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -257,7 +480,7 @@ const shaderClearGrid: ShaderSchema = {
   source: `
 ${sharedBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   let numCells = gridWidth() * gridHeight();
@@ -275,7 +498,7 @@ const shaderBuildGrid: ShaderSchema = {
   source: `
 ${sharedBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -300,7 +523,7 @@ const shaderPbfLambda: ShaderSchema = {
 ${sharedBindingsWGSL}
 ${pbfSolverBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -366,7 +589,7 @@ const shaderPbfDelta: ShaderSchema = {
 ${sharedBindingsWGSL}
 ${pbfSolverBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -398,7 +621,7 @@ const shaderApplyDelta: ShaderSchema = {
   source: `
 ${sharedBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -414,7 +637,7 @@ const shaderEpilogue: ShaderSchema = {
   source: `
 ${sharedBindingsWGSL}
 
-@compute @workgroup_size(128)
+  @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
@@ -554,7 +777,7 @@ const pipelinePrologue: ComputePipelineSchema = {
   type: "compute",
   shader: "shader-prologue",
   bindGroups: [{ group: 0, layout: "layout-shared" }],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelineClearGrid: ComputePipelineSchema = {
@@ -562,7 +785,7 @@ const pipelineClearGrid: ComputePipelineSchema = {
   type: "compute",
   shader: "shader-clear-grid",
   bindGroups: [{ group: 0, layout: "layout-shared" }],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelineBuildGrid: ComputePipelineSchema = {
@@ -570,7 +793,7 @@ const pipelineBuildGrid: ComputePipelineSchema = {
   type: "compute",
   shader: "shader-build-grid",
   bindGroups: [{ group: 0, layout: "layout-shared" }],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelinePbfLambda: ComputePipelineSchema = {
@@ -581,7 +804,7 @@ const pipelinePbfLambda: ComputePipelineSchema = {
     { group: 0, layout: "layout-shared" },
     { group: 1, layout: "layout-pbf" },
   ],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelinePbfDelta: ComputePipelineSchema = {
@@ -592,7 +815,7 @@ const pipelinePbfDelta: ComputePipelineSchema = {
     { group: 0, layout: "layout-shared" },
     { group: 1, layout: "layout-pbf" },
   ],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelineApplyDelta: ComputePipelineSchema = {
@@ -600,7 +823,7 @@ const pipelineApplyDelta: ComputePipelineSchema = {
   type: "compute",
   shader: "shader-apply-delta",
   bindGroups: [{ group: 0, layout: "layout-shared" }],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 const pipelineEpilogue: ComputePipelineSchema = {
@@ -608,7 +831,7 @@ const pipelineEpilogue: ComputePipelineSchema = {
   type: "compute",
   shader: "shader-epilogue",
   bindGroups: [{ group: 0, layout: "layout-shared" }],
-  workgroupSize: [128, 1, 1],
+  workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
 // ============================================================================
@@ -620,7 +843,7 @@ const passPrologue: ComputePassSchema = {
   type: "compute",
   pipelineRef: "pipeline-prologue",
   bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 const passClearGrid: ComputePassSchema = {
@@ -628,7 +851,7 @@ const passClearGrid: ComputePassSchema = {
   type: "compute",
   pipelineRef: "pipeline-clear-grid",
   bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
-  dispatch: { expr: `ceil(${GRID_WIDTH * GRID_HEIGHT} / 128)` },
+  dispatch: { expr: `ceil(${GRID_WIDTH * GRID_HEIGHT} / ${WORKGROUP_SIZE})` },
 };
 
 const passBuildGrid: ComputePassSchema = {
@@ -636,7 +859,7 @@ const passBuildGrid: ComputePassSchema = {
   type: "compute",
   pipelineRef: "pipeline-build-grid",
   bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 const passPbfLambda: ComputePassSchema = {
@@ -647,7 +870,7 @@ const passPbfLambda: ComputePassSchema = {
     { group: 0, bindGroupRef: "bg-shared" },
     { group: 1, bindGroupRef: "bg-pbf" },
   ],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 const passPbfDelta: ComputePassSchema = {
@@ -658,7 +881,7 @@ const passPbfDelta: ComputePassSchema = {
     { group: 0, bindGroupRef: "bg-shared" },
     { group: 1, bindGroupRef: "bg-pbf" },
   ],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 const passApplyDelta: ComputePassSchema = {
@@ -666,7 +889,7 @@ const passApplyDelta: ComputePassSchema = {
   type: "compute",
   pipelineRef: "pipeline-apply-delta",
   bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 const passEpilogue: ComputePassSchema = {
@@ -674,7 +897,7 @@ const passEpilogue: ComputePassSchema = {
   type: "compute",
   pipelineRef: "pipeline-epilogue",
   bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
-  dispatch: { expr: `ceil(${NUM_PARTICLES} / 128)` },
+  dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
 // ============================================================================
