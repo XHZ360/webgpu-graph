@@ -48,6 +48,7 @@ export const PBF_SIMULATION_METADATA = Object.freeze({
   gridHeight: PBF_GRID_HEIGHT,
   maxParticlesPerCell: PBF_MAX_PARTICLES_PER_CELL,
   maxNeighbors: PBF_MAX_NEIGHBORS,
+  pbfIterations: 5,
   workgroupSize: PBF_WORKGROUP_SIZE,
   simParamsFloatCount: PBF_SIM_PARAMS_FLOAT_COUNT,
   simParamsSize: PBF_SIM_PARAMS_SIZE,
@@ -59,6 +60,7 @@ export interface PbfSimulationParams {
   gridHeight: number;
   maxParticlesPerCell: number;
   maxNeighbors: number;
+  pbfIterations: number;
   timeDelta: number;
   h: number;
   rho0: number;
@@ -113,35 +115,36 @@ export const PBF_DEFAULT_SIMULATION_PARAMS: Readonly<PbfSimulationParams> = Obje
   gridHeight: PBF_GRID_HEIGHT,
   maxParticlesPerCell: PBF_MAX_PARTICLES_PER_CELL,
   maxNeighbors: PBF_MAX_NEIGHBORS,
-  timeDelta: 1 / 120,
-  h: 0.1,
+  pbfIterations: PBF_SIMULATION_METADATA.pbfIterations,
+  timeDelta: 1 / 20,
+  h: 1.1,
   rho0: 1,
   lambdaEpsilon: 100,
-  boundaryX: 4,
-  boundaryY: 2,
-  particleRadiusInWorld: 0.02,
+  boundaryX: 80,
+  boundaryY: 40,
+  particleRadiusInWorld: 0.3,
   epsilon: 1e-5,
   mass: 1,
-  neighborRadius: 0.1,
+  neighborRadius: 1.1 * 1.05,
   corrDeltaQCoeff: 0.3,
   corrK: 0.001,
-  poly6Factor: computePoly6Factor(0.1),
-  spikyGradFactor: computeSpikyGradFactor(0.1),
-  cellReciprocal: 8,
-  boundaryMode: 0,
-  boundaryCenterX: 2,
-  viscosityEnabled: 1,
-  viscosityC: 0.03,
-  boundaryCenterY: 1,
-  boundaryHalfHeight: 0.85,
-  boundaryBezierNeckWidth: 1.8,
-  boundaryBezierTopWidth: 3.2,
-  boundaryBezierBottomWidth: 3.2,
+  poly6Factor: computePoly6Factor(1.1),
+  spikyGradFactor: computeSpikyGradFactor(1.1),
+  cellReciprocal: 1 / 2.51,
+  boundaryMode: 1,
+  boundaryCenterX: 40,
+  viscosityEnabled: 0,
+  viscosityC: 0,
+  boundaryCenterY: 20,
+  boundaryHalfHeight: 18,
+  boundaryBezierNeckWidth: 20,
+  boundaryBezierTopWidth: 80,
+  boundaryBezierBottomWidth: 80,
   inertialAccelX: 0,
   inertialAccelY: 0,
   gravityX: 0,
-  gravityY: -1.2,
-  velocityDamping: 0.99,
+  gravityY: -9.8,
+  velocityDamping: 0.985,
 });
 
 function resolvePbfSimulationParams(
@@ -156,13 +159,29 @@ function resolvePbfSimulationParams(
     ...params,
     poly6Factor: overrides.poly6Factor ?? computePoly6Factor(params.h),
     spikyGradFactor: overrides.spikyGradFactor ?? computeSpikyGradFactor(params.h),
-    cellReciprocal: overrides.cellReciprocal ?? params.gridWidth / params.boundaryX,
+    cellReciprocal:
+      overrides.cellReciprocal ??
+      (overrides.boundaryX !== undefined
+        ? params.gridWidth / params.boundaryX
+        : params.cellReciprocal),
     boundaryCenterX: overrides.boundaryCenterX ?? params.boundaryX * 0.5,
     boundaryCenterY: overrides.boundaryCenterY ?? params.boundaryY * 0.5,
-    boundaryHalfHeight: overrides.boundaryHalfHeight ?? params.boundaryY * 0.425,
-    boundaryBezierNeckWidth: overrides.boundaryBezierNeckWidth ?? params.boundaryX * 0.45,
-    boundaryBezierTopWidth: overrides.boundaryBezierTopWidth ?? params.boundaryX * 0.8,
-    boundaryBezierBottomWidth: overrides.boundaryBezierBottomWidth ?? params.boundaryX * 0.8,
+    boundaryHalfHeight:
+      overrides.boundaryHalfHeight ??
+      (overrides.boundaryY !== undefined ? params.boundaryY * 0.425 : params.boundaryHalfHeight),
+    boundaryBezierNeckWidth:
+      overrides.boundaryBezierNeckWidth ??
+      (overrides.boundaryX !== undefined
+        ? params.boundaryX * 0.45
+        : params.boundaryBezierNeckWidth),
+    boundaryBezierTopWidth:
+      overrides.boundaryBezierTopWidth ??
+      (overrides.boundaryX !== undefined ? params.boundaryX * 0.8 : params.boundaryBezierTopWidth),
+    boundaryBezierBottomWidth:
+      overrides.boundaryBezierBottomWidth ??
+      (overrides.boundaryX !== undefined
+        ? params.boundaryX * 0.8
+        : params.boundaryBezierBottomWidth),
   };
 }
 
@@ -172,17 +191,16 @@ export function createPbfInitialPositions(
   const params = resolvePbfSimulationParams(overrides);
   const positions = new Float32Array(PBF_NUM_PARTICLES * 2);
 
-  const startX = Math.max(params.particleRadiusInWorld * 2, params.boundaryX * 0.14);
-  const startY = Math.max(params.particleRadiusInWorld * 2, params.boundaryY * 0.25);
-  const spacingX = (params.boundaryX - startX * 2) / (INITIAL_PARTICLE_COLUMNS - 1);
-  const spacingY = (params.boundaryY - startY * 2) / (INITIAL_PARTICLE_ROWS - 1);
+  const delta = params.h * 0.8;
+  const offsetX = (params.boundaryX - delta * INITIAL_PARTICLE_COLUMNS) * 0.5;
+  const offsetY = params.boundaryY;
 
   for (let row = 0; row < INITIAL_PARTICLE_ROWS; row += 1) {
     for (let col = 0; col < INITIAL_PARTICLE_COLUMNS; col += 1) {
       const index = row * INITIAL_PARTICLE_COLUMNS + col;
       const offset = index * 2;
-      positions[offset] = startX + col * spacingX;
-      positions[offset + 1] = startY + row * spacingY;
+      positions[offset] = col * delta + offsetX;
+      positions[offset + 1] = offsetY - row * delta;
     }
   }
 
@@ -190,7 +208,15 @@ export function createPbfInitialPositions(
 }
 
 export function createPbfInitialVelocities(): Float32Array {
-  return new Float32Array(PBF_NUM_PARTICLES * 2);
+  const velocities = new Float32Array(PBF_NUM_PARTICLES * 2);
+  let seed = 0x12345678;
+
+  for (let index = 0; index < velocities.length; index += 1) {
+    seed = (1664525 * seed + 1013904223) >>> 0;
+    velocities[index] = (seed / 0x100000000 - 0.5) * 4;
+  }
+
+  return velocities;
 }
 
 export function createPbfInitialParticleState(
@@ -216,7 +242,7 @@ export function packPbfSimulationParams(
   packed[2] = params.gridHeight;
   packed[3] = params.maxParticlesPerCell;
   packed[4] = params.maxNeighbors;
-  packed[5] = 0;
+  packed[5] = params.pbfIterations;
   packed[6] = params.timeDelta;
   packed[7] = params.h;
   packed[8] = params.rho0;
@@ -441,7 +467,7 @@ struct F32Buffer {
   data: array<f32>,
 }
 
-@group(1) @binding(0) var<storage, read_write> lambdas: F32Buffer;
+@group(0) @binding(9) var<storage, read_write> lambdas: F32Buffer;
 `;
 
 // ============================================================================
@@ -518,7 +544,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 const shaderPbfLambda: ShaderSchema = {
   name: "shader-pbf-lambda",
   entryPoint: "main",
-  bindGroupLayoutRefs: ["layout-shared", "layout-pbf"],
+  bindGroupLayoutRefs: ["layout-shared"],
   source: `
 ${sharedBindingsWGSL}
 ${pbfSolverBindingsWGSL}
@@ -584,7 +610,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 const shaderPbfDelta: ShaderSchema = {
   name: "shader-pbf-delta",
   entryPoint: "main",
-  bindGroupLayoutRefs: ["layout-shared", "layout-pbf"],
+  bindGroupLayoutRefs: ["layout-shared"],
   source: `
 ${sharedBindingsWGSL}
 ${pbfSolverBindingsWGSL}
@@ -735,10 +761,7 @@ const layoutShared: BindGroupLayoutSchema = createBindGroupLayoutSchema("layout-
   createBindingSchema(6, "neighborCounts", "buffer", SHADER_STAGE.COMPUTE),
   createBindingSchema(7, "neighbors", "buffer", SHADER_STAGE.COMPUTE),
   createBindingSchema(8, "simParams", "buffer", SHADER_STAGE.COMPUTE),
-]);
-
-const layoutPbf: BindGroupLayoutSchema = createBindGroupLayoutSchema("layout-pbf", [
-  createBindingSchema(0, "lambdas", "buffer", SHADER_STAGE.COMPUTE),
+  createBindingSchema(9, "lambdas", "buffer", SHADER_STAGE.COMPUTE),
 ]);
 
 // ============================================================================
@@ -758,13 +781,8 @@ const bgShared: BindGroupSchema = {
     { binding: 6, resourceRef: "neighborCounts" },
     { binding: 7, resourceRef: "neighbors" },
     { binding: 8, resourceRef: "simParams" },
+    { binding: 9, resourceRef: "lambdas" },
   ],
-};
-
-const bgPbf: BindGroupSchema = {
-  name: "bg-pbf",
-  layout: "layout-pbf",
-  bindings: [{ binding: 0, resourceRef: "lambdas" }],
 };
 
 // ============================================================================
@@ -799,10 +817,7 @@ const pipelinePbfLambda: ComputePipelineSchema = {
   name: "pipeline-pbf-lambda",
   type: "compute",
   shader: "shader-pbf-lambda",
-  bindGroups: [
-    { group: 0, layout: "layout-shared" },
-    { group: 1, layout: "layout-pbf" },
-  ],
+  bindGroups: [{ group: 0, layout: "layout-shared" }],
   workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
@@ -810,10 +825,7 @@ const pipelinePbfDelta: ComputePipelineSchema = {
   name: "pipeline-pbf-delta",
   type: "compute",
   shader: "shader-pbf-delta",
-  bindGroups: [
-    { group: 0, layout: "layout-shared" },
-    { group: 1, layout: "layout-pbf" },
-  ],
+  bindGroups: [{ group: 0, layout: "layout-shared" }],
   workgroupSize: [WORKGROUP_SIZE, 1, 1],
 };
 
@@ -865,10 +877,7 @@ const passPbfLambda: ComputePassSchema = {
   name: "pass-pbf-lambda",
   type: "compute",
   pipelineRef: "pipeline-pbf-lambda",
-  bindGroups: [
-    { group: 0, bindGroupRef: "bg-shared" },
-    { group: 1, bindGroupRef: "bg-pbf" },
-  ],
+  bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
   dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
@@ -876,10 +885,7 @@ const passPbfDelta: ComputePassSchema = {
   name: "pass-pbf-delta",
   type: "compute",
   pipelineRef: "pipeline-pbf-delta",
-  bindGroups: [
-    { group: 0, bindGroupRef: "bg-shared" },
-    { group: 1, bindGroupRef: "bg-pbf" },
-  ],
+  bindGroups: [{ group: 0, bindGroupRef: "bg-shared" }],
   dispatch: { expr: `ceil(${NUM_PARTICLES} / ${WORKGROUP_SIZE})` },
 };
 
@@ -906,9 +912,9 @@ const passEpilogue: ComputePassSchema = {
 const mainRenderGraph: RenderGraphSchema = {
   name: "main-simulation-graph",
   nodes: [
-    { name: "node-clear-grid", passRef: "pass-clear-grid" },
-    { name: "node-prologue", passRef: "pass-prologue", dependencies: ["node-clear-grid"] },
-    { name: "node-build-grid", passRef: "pass-build-grid", dependencies: ["node-prologue"] },
+    { name: "node-prologue", passRef: "pass-prologue" },
+    { name: "node-clear-grid", passRef: "pass-clear-grid", dependencies: ["node-prologue"] },
+    { name: "node-build-grid", passRef: "pass-build-grid", dependencies: ["node-clear-grid"] },
     { name: "node-pbf-lambda", passRef: "pass-pbf-lambda", dependencies: ["node-build-grid"] },
     { name: "node-pbf-delta", passRef: "pass-pbf-delta", dependencies: ["node-pbf-lambda"] },
     { name: "node-apply-delta", passRef: "pass-apply-delta", dependencies: ["node-pbf-delta"] },
@@ -939,12 +945,10 @@ export const pbfSimulationSchema: WebGpuSimulationSchema = {
 
   bindGroupLayouts: {
     "layout-shared": layoutShared,
-    "layout-pbf": layoutPbf,
   },
 
   bindGroups: {
     "bg-shared": bgShared,
-    "bg-pbf": bgPbf,
   },
 
   shaders: {
@@ -999,9 +1003,7 @@ export function createPbfSimulationSchema(): WebGpuSimulationSchema {
     .addBuffer(bufferLambdas)
     .addBuffer(bufferSimParams)
     .addBindGroupLayout(layoutShared)
-    .addBindGroupLayout(layoutPbf)
     .addBindGroup(bgShared)
-    .addBindGroup(bgPbf)
     .addShader(shaderPrologue)
     .addShader(shaderClearGrid)
     .addShader(shaderBuildGrid)

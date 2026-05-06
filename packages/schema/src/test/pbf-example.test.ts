@@ -51,11 +51,11 @@ describe("PBF Simulation Schema", () => {
   });
 
   it("has correct number of bind group layouts", () => {
-    expect(Object.keys(schema.bindGroupLayouts)).toHaveLength(2);
+    expect(Object.keys(schema.bindGroupLayouts)).toHaveLength(1);
   });
 
   it("has correct number of bind groups", () => {
-    expect(Object.keys(schema.bindGroups)).toHaveLength(2);
+    expect(Object.keys(schema.bindGroups)).toHaveLength(1);
   });
 
   it("has correct number of shaders", () => {
@@ -78,16 +78,10 @@ describe("PBF Simulation Schema", () => {
     expect(schema.mainGraphRef).toBe("main-simulation-graph");
   });
 
-  it("layout-shared has 9 bindings", () => {
+  it("layout-shared has 10 bindings", () => {
     const layout = schema.bindGroupLayouts["layout-shared"];
     expect(layout).toBeDefined();
-    expect(layout.bindings).toHaveLength(9);
-  });
-
-  it("layout-pbf has 1 binding", () => {
-    const layout = schema.bindGroupLayouts["layout-pbf"];
-    expect(layout).toBeDefined();
-    expect(layout.bindings).toHaveLength(1);
+    expect(layout.bindings).toHaveLength(10);
   });
 
   it("positions buffer is not directly mappable", () => {
@@ -107,27 +101,25 @@ describe("PBF Simulation Schema", () => {
     const graph = schema.renderGraphs["main-simulation-graph"];
     const nodeMap = new Map(graph.nodes.map((n) => [n.name, n]));
 
-    expect(nodeMap.get("node-clear-grid")!.dependencies).toBeUndefined();
-    expect(nodeMap.get("node-prologue")!.dependencies).toEqual(["node-clear-grid"]);
-    expect(nodeMap.get("node-build-grid")!.dependencies).toEqual(["node-prologue"]);
+    expect(nodeMap.get("node-prologue")!.dependencies).toBeUndefined();
+    expect(nodeMap.get("node-clear-grid")!.dependencies).toEqual(["node-prologue"]);
+    expect(nodeMap.get("node-build-grid")!.dependencies).toEqual(["node-clear-grid"]);
     expect(nodeMap.get("node-pbf-lambda")!.dependencies).toEqual(["node-build-grid"]);
     expect(nodeMap.get("node-pbf-delta")!.dependencies).toEqual(["node-pbf-lambda"]);
     expect(nodeMap.get("node-apply-delta")!.dependencies).toEqual(["node-pbf-delta"]);
     expect(nodeMap.get("node-epilogue")!.dependencies).toEqual(["node-apply-delta"]);
   });
 
-  it("pbf-lambda pipeline uses both layouts", () => {
+  it("pbf-lambda pipeline uses the shared layout", () => {
     const computePipeline = expectComputePipeline(schema.pipelines["pipeline-pbf-lambda"]);
-    expect(computePipeline.bindGroups).toHaveLength(2);
+    expect(computePipeline.bindGroups).toHaveLength(1);
     expect(computePipeline.bindGroups[0]).toEqual({ group: 0, layout: "layout-shared" });
-    expect(computePipeline.bindGroups[1]).toEqual({ group: 1, layout: "layout-pbf" });
   });
 
-  it("pbf-lambda pass uses both bind groups", () => {
+  it("pbf-lambda pass uses the shared bind group", () => {
     const computePass = expectComputePass(schema.passes["pass-pbf-lambda"]);
-    expect(computePass.bindGroups).toHaveLength(2);
+    expect(computePass.bindGroups).toHaveLength(1);
     expect(computePass.bindGroups[0]).toEqual({ group: 0, bindGroupRef: "bg-shared" });
-    expect(computePass.bindGroups[1]).toEqual({ group: 1, bindGroupRef: "bg-pbf" });
   });
 
   it("builder creates identical schema", () => {
@@ -142,6 +134,7 @@ describe("PBF Simulation Schema", () => {
       gridHeight: PBF_GRID_HEIGHT,
       maxParticlesPerCell: 100,
       maxNeighbors: 100,
+      pbfIterations: 5,
       workgroupSize: PBF_WORKGROUP_SIZE,
       simParamsFloatCount: PBF_SIM_PARAMS_FLOAT_COUNT,
       simParamsSize: PBF_SIM_PARAMS_SIZE,
@@ -161,22 +154,24 @@ describe("PBF Simulation Schema", () => {
     const positionsA = createPbfInitialPositions();
     const positionsB = createPbfInitialPositions();
     const velocities = createPbfInitialVelocities();
+    const velocitiesB = createPbfInitialVelocities();
     const state = createPbfInitialParticleState();
 
     expect(positionsA).toEqual(positionsB);
     expect(positionsA).toHaveLength(PBF_NUM_PARTICLES * 2);
     expect(velocities).toHaveLength(PBF_NUM_PARTICLES * 2);
-    expect(Array.from(velocities)).toSatisfy((values: number[]) =>
-      values.every((value: number) => value === 0),
-    );
+    expect(velocities).toEqual(velocitiesB);
     expect(state.positions).toEqual(positionsA);
     expect(state.oldPositions).toEqual(positionsA);
     expect(state.oldPositions).not.toBe(state.positions);
     expect(state.velocities).toEqual(velocities);
-    expect(positionsA[0]).toBeCloseTo(0.56);
-    expect(positionsA[1]).toBeCloseTo(0.5);
-    expect(positionsA[positionsA.length - 2]).toBeCloseTo(3.44);
-    expect(positionsA[positionsA.length - 1]).toBeCloseTo(1.5);
+    expect(positionsA[0]).toBeCloseTo(13.6);
+    expect(positionsA[1]).toBeCloseTo(40);
+    expect(positionsA[positionsA.length - 2]).toBeCloseTo(65.52);
+    expect(positionsA[positionsA.length - 1]).toBeCloseTo(23.28);
+    expect(Array.from(velocities)).toSatisfy((values: number[]) =>
+      values.every((value: number) => value >= -2 && value <= 2),
+    );
   });
 
   it("packs simulation params into the exact WGSL float layout", () => {
@@ -190,20 +185,27 @@ describe("PBF Simulation Schema", () => {
     expect(packed[2]).toBe(PBF_GRID_HEIGHT);
     expect(packed[3]).toBe(100);
     expect(packed[4]).toBe(100);
-    expect(packed[5]).toBe(0);
-    expect(packed[6]).toBeCloseTo(1 / 120);
-    expect(packed[7]).toBeCloseTo(0.1);
-    expect(packed[20]).toBeCloseTo(8);
+    expect(packed[5]).toBe(5);
+    expect(packed[6]).toBeCloseTo(1 / 20);
+    expect(packed[7]).toBeCloseTo(1.1);
+    expect(packed[10]).toBeCloseTo(80);
+    expect(packed[11]).toBeCloseTo(40);
+    expect(packed[12]).toBeCloseTo(0.3);
+    expect(packed[15]).toBeCloseTo(1.1 * 1.05);
+    expect(packed[20]).toBeCloseTo(1 / 2.51);
     expect(packed[21]).toBe(0);
-    expect(packed[22]).toBe(0);
-    expect(packed[23]).toBeCloseTo(2);
-    expect(packed[24]).toBe(1);
-    expect(packed[25]).toBeCloseTo(0.03);
-    expect(packed[26]).toBeCloseTo(1);
-    expect(packed[27]).toBeCloseTo(0.85);
+    expect(packed[22]).toBe(1);
+    expect(packed[23]).toBeCloseTo(40);
+    expect(packed[24]).toBe(0);
+    expect(packed[25]).toBeCloseTo(0);
+    expect(packed[26]).toBeCloseTo(20);
+    expect(packed[27]).toBeCloseTo(18);
+    expect(packed[28]).toBeCloseTo(20);
+    expect(packed[29]).toBeCloseTo(80);
+    expect(packed[30]).toBeCloseTo(80);
     expect(packed[33]).toBe(0);
-    expect(packed[34]).toBeCloseTo(-1.2);
-    expect(packed[35]).toBeCloseTo(0.99);
+    expect(packed[34]).toBeCloseTo(-9.8);
+    expect(packed[35]).toBeCloseTo(0.985);
   });
 
   it("recomputes derived params when overrides change domain scale", () => {
