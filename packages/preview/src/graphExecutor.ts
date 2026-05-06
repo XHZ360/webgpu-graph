@@ -86,6 +86,56 @@ export class GraphExecutor {
     return 1;
   }
 
+  private getComputePass(passRef: string): ComputePassSchema {
+    const pass = this.schema.passes[passRef];
+    if (!pass) {
+      throw new Error(`Compute pass reference "${passRef}" not found in schema`);
+    }
+    if (pass.type !== "compute") {
+      throw new Error(`Pass "${passRef}" is not a compute pass`);
+    }
+    return pass;
+  }
+
+  private getNumericContextParam(
+    context: SchemaExecutionContext | undefined,
+    name: string,
+  ): number | null {
+    const value = context?.params[name];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
+  private getPbfIterationCount(context?: SchemaExecutionContext): number {
+    const iterations = this.getNumericContextParam(context, "pbfIterations");
+    if (iterations !== null) {
+      return Math.max(0, Math.floor(iterations));
+    }
+
+    const legacyIterations = this.getNumericContextParam(context, "iterationCount");
+    if (legacyIterations !== null) {
+      return Math.max(0, Math.floor(legacyIterations));
+    }
+
+    context?.reportError(
+      "PBF iterative execution requested but no pbfIterations/iterationCount param was provided. Falling back to 1 iteration.",
+    );
+    return 1;
+  }
+
+  private shouldUseIterativePbfExecution(): boolean {
+    const requiredPasses = [
+      "pass-prologue",
+      "pass-clear-grid",
+      "pass-build-grid",
+      "pass-pbf-lambda",
+      "pass-pbf-delta",
+      "pass-apply-delta",
+      "pass-epilogue",
+    ];
+
+    return requiredPasses.every((passRef) => passRef in this.schema.passes);
+  }
+
   private executeComputePass(
     commandEncoder: GPUCommandEncoder,
     passSchema: ComputePassSchema,
@@ -119,10 +169,41 @@ export class GraphExecutor {
     computePass.end();
   }
 
+  private executeIterativePbfGraph(
+    commandEncoder: GPUCommandEncoder,
+    context?: SchemaExecutionContext,
+  ): void {
+    const prologue = this.getComputePass("pass-prologue");
+    const clearGrid = this.getComputePass("pass-clear-grid");
+    const buildGrid = this.getComputePass("pass-build-grid");
+    const lambda = this.getComputePass("pass-pbf-lambda");
+    const delta = this.getComputePass("pass-pbf-delta");
+    const applyDelta = this.getComputePass("pass-apply-delta");
+    const epilogue = this.getComputePass("pass-epilogue");
+
+    this.executeComputePass(commandEncoder, prologue, context);
+
+    const iterations = this.getPbfIterationCount(context);
+    for (let index = 0; index < iterations; index += 1) {
+      this.executeComputePass(commandEncoder, clearGrid, context);
+      this.executeComputePass(commandEncoder, buildGrid, context);
+      this.executeComputePass(commandEncoder, lambda, context);
+      this.executeComputePass(commandEncoder, delta, context);
+      this.executeComputePass(commandEncoder, applyDelta, context);
+    }
+
+    this.executeComputePass(commandEncoder, epilogue, context);
+  }
+
   execute(commandEncoder: GPUCommandEncoder, context?: SchemaExecutionContext): void {
     const graph = this.schema.renderGraphs[this.schema.mainGraphRef];
     if (!graph) {
       throw new Error(`mainGraphRef "${this.schema.mainGraphRef}" not found in renderGraphs`);
+    }
+
+    if (this.shouldUseIterativePbfExecution()) {
+      this.executeIterativePbfGraph(commandEncoder, context);
+      return;
     }
 
     const sortedNodeNames = this.topologicalSort();

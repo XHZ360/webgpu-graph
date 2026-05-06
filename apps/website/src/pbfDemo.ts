@@ -222,6 +222,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
         context: createDispatchExecutionContext({
           params: {
             particleCount: PBF_SIMULATION_METADATA.particleCount,
+            pbfIterations: PBF_DEFAULT_SIMULATION_PARAMS.pbfIterations,
             workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
           },
           reportError(message) {
@@ -308,6 +309,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
           context: createDispatchExecutionContext({
             params: {
               particleCount: PBF_SIMULATION_METADATA.particleCount,
+              pbfIterations: PBF_DEFAULT_SIMULATION_PARAMS.pbfIterations,
               workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
             },
             reportError(message) {
