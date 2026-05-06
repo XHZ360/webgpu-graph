@@ -4,6 +4,7 @@ import {
   packPbfSimulationParams,
   PBF_DEFAULT_SIMULATION_PARAMS,
   PBF_SIMULATION_METADATA,
+  type PbfSimulationParams,
 } from "schema/examples/pbf-simulation";
 import { SimulationRunner, createDispatchExecutionContext, getRequiredDeviceLimits } from "preview";
 import { ParticleCanvasRenderer } from "./render2d.ts";
@@ -18,10 +19,63 @@ interface DemoDom {
   message: HTMLDivElement;
   toggleButton: HTMLButtonElement;
   resetButton: HTMLButtonElement;
+  solverModeSelect: HTMLSelectElement;
+  iterInput: HTMLInputElement;
+  iterValue: HTMLSpanElement;
+  hInput: HTMLInputElement;
+  hValue: HTMLSpanElement;
+  neighborRadiusInput: HTMLInputElement;
+  neighborRadiusValue: HTMLSpanElement;
+  lambdaEpsInput: HTMLInputElement;
+  lambdaEpsValue: HTMLSpanElement;
+  corrKInput: HTMLInputElement;
+  corrKValue: HTMLSpanElement;
+  timeDeltaInput: HTMLInputElement;
+  timeDeltaValue: HTMLSpanElement;
+  massInput: HTMLInputElement;
+  massValue: HTMLSpanElement;
+  rho0Input: HTMLInputElement;
+  rho0Value: HTMLSpanElement;
+  particleRadiusInput: HTMLInputElement;
+  particleRadiusValue: HTMLSpanElement;
+  particleCountInput: HTMLInputElement;
+  particleCountValueLabel: HTMLSpanElement;
+  boundaryModeSelect: HTMLSelectElement;
+  bezierControls: HTMLDivElement;
+  boundaryHalfHeightInput: HTMLInputElement;
+  boundaryHalfHeightValue: HTMLSpanElement;
+  boundaryNeckWidthInput: HTMLInputElement;
+  boundaryNeckWidthValue: HTMLSpanElement;
+  boundaryEndWidthInput: HTMLInputElement;
+  boundaryEndWidthValue: HTMLSpanElement;
+  viscosityEnabledInput: HTMLInputElement;
+  viscosityCInput: HTMLInputElement;
+  viscosityCValue: HTMLSpanElement;
+  readbackInput: HTMLInputElement;
+  readbackValue: HTMLSpanElement;
   supportValue: HTMLElement;
   runStateValue: HTMLElement;
   frameCountValue: HTMLElement;
   particleCountValue: HTMLElement;
+}
+
+interface PersistedParams {
+  iter: string;
+  h: string;
+  neighborRadius: string;
+  lambdaEps: string;
+  corrK: string;
+  timeDelta: string;
+  mass: string;
+  rho0: string;
+  particleRadius: string;
+  boundaryMode: "box" | "bezier";
+  boundaryHalfHeight: string;
+  boundaryNeckWidth: string;
+  boundaryEndWidth: string;
+  viscosityEnabled: boolean;
+  viscosityC: string;
+  readback: string;
 }
 
 interface SimulationState {
@@ -31,7 +85,9 @@ interface SimulationState {
 
 const CANVAS_WIDTH = 960;
 const CANVAS_HEIGHT = 540;
-const READBACK_INTERVAL = 2;
+const REBUILD_DEBOUNCE_MS = 180;
+const SCREEN_TO_WORLD_RATIO = 10;
+const SESSION_KEY = "website-pbf-demo-params";
 const STATUS_SUPPORT_PENDING = "Checking";
 const STATUS_SUPPORT_READY = "Supported";
 const STATUS_SUPPORT_UNAVAILABLE = "Unavailable";
@@ -42,15 +98,143 @@ const STATUS_RUN_ERROR = "Error";
 const HELP_TEXT =
   "This demo executes the schema-defined PBF compute graph on WebGPU and renders positions through a CPU readback path into a 2D canvas.";
 
+function setSliderLabel(input: HTMLInputElement, label: HTMLElement, digits: number): void {
+  label.textContent = Number(input.value).toFixed(digits);
+}
+
+function collectParams(dom: DemoDom): PersistedParams {
+  return {
+    iter: dom.iterInput.value,
+    h: dom.hInput.value,
+    neighborRadius: dom.neighborRadiusInput.value,
+    lambdaEps: dom.lambdaEpsInput.value,
+    corrK: dom.corrKInput.value,
+    timeDelta: dom.timeDeltaInput.value,
+    mass: dom.massInput.value,
+    rho0: dom.rho0Input.value,
+    particleRadius: dom.particleRadiusInput.value,
+    boundaryMode: dom.boundaryModeSelect.value as "box" | "bezier",
+    boundaryHalfHeight: dom.boundaryHalfHeightInput.value,
+    boundaryNeckWidth: dom.boundaryNeckWidthInput.value,
+    boundaryEndWidth: dom.boundaryEndWidthInput.value,
+    viscosityEnabled: dom.viscosityEnabledInput.checked,
+    viscosityC: dom.viscosityCInput.value,
+    readback: dom.readbackInput.value,
+  };
+}
+
+function applyParams(dom: DemoDom, params: Partial<PersistedParams>): void {
+  if (params.iter !== undefined) dom.iterInput.value = params.iter;
+  if (params.h !== undefined) dom.hInput.value = params.h;
+  if (params.neighborRadius !== undefined) dom.neighborRadiusInput.value = params.neighborRadius;
+  if (params.lambdaEps !== undefined) dom.lambdaEpsInput.value = params.lambdaEps;
+  if (params.corrK !== undefined) dom.corrKInput.value = params.corrK;
+  if (params.timeDelta !== undefined) dom.timeDeltaInput.value = params.timeDelta;
+  if (params.mass !== undefined) dom.massInput.value = params.mass;
+  if (params.rho0 !== undefined) dom.rho0Input.value = params.rho0;
+  if (params.particleRadius !== undefined) dom.particleRadiusInput.value = params.particleRadius;
+  if (params.boundaryMode !== undefined) dom.boundaryModeSelect.value = params.boundaryMode;
+  if (params.boundaryHalfHeight !== undefined) {
+    dom.boundaryHalfHeightInput.value = params.boundaryHalfHeight;
+  }
+  if (params.boundaryNeckWidth !== undefined) {
+    dom.boundaryNeckWidthInput.value = params.boundaryNeckWidth;
+  }
+  if (params.boundaryEndWidth !== undefined) {
+    dom.boundaryEndWidthInput.value = params.boundaryEndWidth;
+  }
+  if (params.viscosityEnabled !== undefined) {
+    dom.viscosityEnabledInput.checked = params.viscosityEnabled;
+  }
+  if (params.viscosityC !== undefined) dom.viscosityCInput.value = params.viscosityC;
+  if (params.readback !== undefined) dom.readbackInput.value = params.readback;
+}
+
+function loadParamsFromSession(dom: DemoDom): void {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) {
+      return;
+    }
+    applyParams(dom, JSON.parse(raw) as Partial<PersistedParams>);
+  } catch {
+    // Ignore malformed or unavailable session storage.
+  }
+}
+
+function saveParamsToSession(dom: DemoDom): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(collectParams(dom)));
+  } catch {
+    // Ignore storage failures to avoid breaking simulation.
+  }
+}
+
+function syncBoundaryControlVisibility(dom: DemoDom): void {
+  dom.bezierControls.classList.toggle("hidden", dom.boundaryModeSelect.value !== "bezier");
+}
+
+function syncParameterLabels(dom: DemoDom): void {
+  setSliderLabel(dom.iterInput, dom.iterValue, 0);
+  setSliderLabel(dom.hInput, dom.hValue, 2);
+  setSliderLabel(dom.neighborRadiusInput, dom.neighborRadiusValue, 2);
+  setSliderLabel(dom.lambdaEpsInput, dom.lambdaEpsValue, 0);
+  setSliderLabel(dom.corrKInput, dom.corrKValue, 4);
+  setSliderLabel(dom.timeDeltaInput, dom.timeDeltaValue, 3);
+  setSliderLabel(dom.massInput, dom.massValue, 2);
+  setSliderLabel(dom.rho0Input, dom.rho0Value, 2);
+  setSliderLabel(dom.particleRadiusInput, dom.particleRadiusValue, 1);
+  setSliderLabel(dom.particleCountInput, dom.particleCountValueLabel, 0);
+  setSliderLabel(dom.boundaryHalfHeightInput, dom.boundaryHalfHeightValue, 1);
+  setSliderLabel(dom.boundaryNeckWidthInput, dom.boundaryNeckWidthValue, 1);
+  setSliderLabel(dom.boundaryEndWidthInput, dom.boundaryEndWidthValue, 1);
+  setSliderLabel(dom.viscosityCInput, dom.viscosityCValue, 3);
+  setSliderLabel(dom.readbackInput, dom.readbackValue, 0);
+  syncBoundaryControlVisibility(dom);
+}
+
+function readSimulationOverrides(dom: DemoDom): Partial<PbfSimulationParams> {
+  return {
+    pbfIterations: Math.max(1, Math.floor(Number(dom.iterInput.value))),
+    h: Number(dom.hInput.value),
+    neighborRadius: Number(dom.neighborRadiusInput.value),
+    lambdaEpsilon: Number(dom.lambdaEpsInput.value),
+    corrK: Number(dom.corrKInput.value),
+    timeDelta: Number(dom.timeDeltaInput.value),
+    mass: Number(dom.massInput.value),
+    rho0: Number(dom.rho0Input.value),
+    particleRadiusInWorld: Number(dom.particleRadiusInput.value) / SCREEN_TO_WORLD_RATIO,
+    boundaryMode: dom.boundaryModeSelect.value === "bezier" ? 1 : 0,
+    boundaryHalfHeight: Number(dom.boundaryHalfHeightInput.value),
+    boundaryBezierNeckWidth: Number(dom.boundaryNeckWidthInput.value),
+    boundaryBezierTopWidth: Number(dom.boundaryEndWidthInput.value),
+    boundaryBezierBottomWidth: Number(dom.boundaryEndWidthInput.value),
+    viscosityEnabled: dom.viscosityEnabledInput.checked ? 1 : 0,
+    viscosityC: Number(dom.viscosityCInput.value),
+  };
+}
+
 export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandle> {
   const dom = createDemoDom();
   container.replaceChildren(dom.root);
+  loadParamsFromSession(dom);
+  syncParameterLabels(dom);
+
+  let simulationParams = {
+    ...PBF_DEFAULT_SIMULATION_PARAMS,
+    ...readSimulationOverrides(dom),
+  };
 
   const renderer = new ParticleCanvasRenderer({
     canvas: dom.canvas,
-    worldWidth: PBF_DEFAULT_SIMULATION_PARAMS.boundaryX,
-    worldHeight: PBF_DEFAULT_SIMULATION_PARAMS.boundaryY,
-    particleRadius: PBF_DEFAULT_SIMULATION_PARAMS.particleRadiusInWorld,
+    worldWidth: simulationParams.boundaryX,
+    worldHeight: simulationParams.boundaryY,
+    particleRadius: simulationParams.particleRadiusInWorld,
+    boundaryMode: simulationParams.boundaryMode,
+    boundaryHalfHeight: simulationParams.boundaryHalfHeight,
+    boundaryBezierNeckWidth: simulationParams.boundaryBezierNeckWidth,
+    boundaryBezierTopWidth: simulationParams.boundaryBezierTopWidth,
+    boundaryBezierBottomWidth: simulationParams.boundaryBezierBottomWidth,
   });
 
   let disposed = false;
@@ -58,6 +242,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
   let resetting = false;
   let rafId = 0;
   let generation = 0;
+  let rebuildTimer = 0;
   let simulation: SimulationState | null = null;
   let stepPromise: Promise<void> | null = null;
 
@@ -107,8 +292,8 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
   };
 
   const initializeBuffers = (state: SimulationState): void => {
-    const initialState = createPbfInitialParticleState();
-    const simParams = packPbfSimulationParams();
+    const initialState = createPbfInitialParticleState(simulationParams);
+    const simParams = packPbfSimulationParams(simulationParams);
 
     state.runner.initialize();
     state.runner.writeBuffer("positions", initialState.positions);
@@ -222,7 +407,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
         context: createDispatchExecutionContext({
           params: {
             particleCount: PBF_SIMULATION_METADATA.particleCount,
-            pbfIterations: PBF_DEFAULT_SIMULATION_PARAMS.pbfIterations,
+            pbfIterations: simulationParams.pbfIterations,
             workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
           },
           reportError(message) {
@@ -251,7 +436,8 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     const frameCount = state.runner.getFrameCount();
     setFrameCount(frameCount);
 
-    if (frameCount === 1 || frameCount % READBACK_INTERVAL === 0) {
+    const readbackEvery = Math.max(1, Math.floor(Number(dom.readbackInput.value)));
+    if (frameCount === 1 || frameCount % readbackEvery === 0) {
       const positions = await state.runner.readBuffer("positions");
       if (disposed || frameGeneration !== generation) {
         return;
@@ -301,6 +487,10 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       await stepPromise;
 
       const previous = simulation;
+      simulationParams = {
+        ...PBF_DEFAULT_SIMULATION_PARAMS,
+        ...readSimulationOverrides(dom),
+      };
       const next: SimulationState = {
         device: previous.device,
         runner: new SimulationRunner({
@@ -309,7 +499,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
           context: createDispatchExecutionContext({
             params: {
               particleCount: PBF_SIMULATION_METADATA.particleCount,
-              pbfIterations: PBF_DEFAULT_SIMULATION_PARAMS.pbfIterations,
+              pbfIterations: simulationParams.pbfIterations,
               workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
             },
             reportError(message) {
@@ -346,6 +536,67 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     void resetSimulation();
   };
 
+  const requestSimulationRebuild = (immediate = false): void => {
+    saveParamsToSession(dom);
+
+    if (rebuildTimer !== 0) {
+      window.clearTimeout(rebuildTimer);
+      rebuildTimer = 0;
+    }
+
+    const runRebuild = (): void => {
+      void resetSimulation();
+    };
+
+    if (immediate) {
+      runRebuild();
+      return;
+    }
+
+    setRunState("Queued");
+    rebuildTimer = window.setTimeout(() => {
+      rebuildTimer = 0;
+      runRebuild();
+    }, REBUILD_DEBOUNCE_MS);
+  };
+
+  const rebuildLabelInputs: Array<[HTMLInputElement, HTMLElement, number]> = [
+    [dom.iterInput, dom.iterValue, 0],
+    [dom.hInput, dom.hValue, 2],
+    [dom.neighborRadiusInput, dom.neighborRadiusValue, 2],
+    [dom.lambdaEpsInput, dom.lambdaEpsValue, 0],
+    [dom.corrKInput, dom.corrKValue, 4],
+    [dom.timeDeltaInput, dom.timeDeltaValue, 3],
+    [dom.massInput, dom.massValue, 2],
+    [dom.rho0Input, dom.rho0Value, 2],
+    [dom.particleRadiusInput, dom.particleRadiusValue, 1],
+    [dom.boundaryHalfHeightInput, dom.boundaryHalfHeightValue, 1],
+    [dom.boundaryNeckWidthInput, dom.boundaryNeckWidthValue, 1],
+    [dom.boundaryEndWidthInput, dom.boundaryEndWidthValue, 1],
+    [dom.viscosityCInput, dom.viscosityCValue, 3],
+  ];
+
+  for (const [input, label, digits] of rebuildLabelInputs) {
+    input.addEventListener("input", () => {
+      setSliderLabel(input, label, digits);
+      requestSimulationRebuild();
+    });
+  }
+
+  dom.boundaryModeSelect.addEventListener("change", () => {
+    syncBoundaryControlVisibility(dom);
+    requestSimulationRebuild();
+  });
+
+  dom.viscosityEnabledInput.addEventListener("change", () => {
+    requestSimulationRebuild();
+  });
+
+  dom.readbackInput.addEventListener("input", () => {
+    setSliderLabel(dom.readbackInput, dom.readbackValue, 0);
+    saveParamsToSession(dom);
+  });
+
   dom.toggleButton.addEventListener("click", onToggleClick);
   dom.resetButton.addEventListener("click", onResetClick);
 
@@ -368,6 +619,9 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       disposed = true;
       running = false;
       generation += 1;
+      if (rebuildTimer !== 0) {
+        window.clearTimeout(rebuildTimer);
+      }
       window.cancelAnimationFrame(rafId);
       dom.toggleButton.removeEventListener("click", onToggleClick);
       dom.resetButton.removeEventListener("click", onResetClick);
@@ -397,22 +651,177 @@ function createDemoDom(): DemoDom {
       <p class="hero__body">A schema-driven WebGPU compute simulation with CPU readback visualization.</p>
     </section>
     <section class="demo">
-      <canvas class="demo__canvas" width="${CANVAS_WIDTH}" height="${CANVAS_HEIGHT}"></canvas>
       <aside class="demo__sidebar">
-        <section class="demo__status">
-          <ul class="status-list">
-            <li>WebGPU: <span data-field="support">${STATUS_SUPPORT_PENDING}</span></li>
-            <li>State: <span data-field="runState">${STATUS_RUN_STOPPED}</span></li>
-            <li>Frames: <span data-field="frameCount">0</span></li>
-            <li>Particles: <span data-field="particleCount">${PBF_SIMULATION_METADATA.particleCount}</span></li>
-          </ul>
-        </section>
+        <!-- Parameter Controls -->
+        <div class="row">
+          <div class="row-head">
+            <label for="solverMode">Solver Mode</label>
+          </div>
+          <select id="solverMode" disabled>
+            <option value="pbf">PBF</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label id="iterLabel" for="iter">PBF Iterations</label>
+            <span class="value" id="iterVal">5</span>
+          </div>
+          <input id="iter" type="range" min="1" max="12" step="1" value="5" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="hValInput">Smoothing Radius h</label>
+            <span class="value" id="hVal">1.10</span>
+          </div>
+          <input id="hValInput" type="range" min="0.80" max="1.60" step="0.01" value="1.10" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="neighborRadius">Neighbor Radius</label>
+            <span class="value" id="neighborRadiusVal">1.16</span>
+          </div>
+          <input id="neighborRadius" type="range" min="0.90" max="2.00" step="0.01" value="1.16" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label id="lambdaEpsLabel" for="lambdaEps">lambda epsilon</label>
+            <span class="value" id="lambdaEpsVal">100</span>
+          </div>
+          <input id="lambdaEps" type="range" min="10" max="300" step="1" value="100" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label id="corrKLabel" for="corrK">Tensile Instability corrK</label>
+            <span class="value" id="corrKVal">0.0010</span>
+          </div>
+          <input id="corrK" type="range" min="0.0000" max="0.0100" step="0.0001" value="0.0010" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="timeDelta">Time Delta dt</label>
+            <span class="value" id="timeDeltaVal">0.050</span>
+          </div>
+          <input id="timeDelta" type="range" min="0.010" max="0.080" step="0.001" value="0.050" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="mass">Particle Mass</label>
+            <span class="value" id="massVal">1.00</span>
+          </div>
+          <input id="mass" type="range" min="0.50" max="2.00" step="0.05" value="1.00" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="rho0">Rest Density rho0</label>
+            <span class="value" id="rho0Val">1.00</span>
+          </div>
+          <input id="rho0" type="range" min="0.50" max="2.00" step="0.05" value="1.00" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="particleRadius">Particle Radius (px)</label>
+            <span class="value" id="particleRadiusVal">3.0</span>
+          </div>
+          <input id="particleRadius" type="range" min="1.0" max="8.0" step="0.1" value="3.0" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="particleCount">Particle Count</label>
+            <span class="value" id="particleCountVal">1200</span>
+          </div>
+          <input id="particleCount" type="range" min="1" max="2400" step="1" value="1200" />
+        </div>
+
+        <div class="group-title">Boundary</div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="boundaryMode">Boundary Mode</label>
+          </div>
+          <select id="boundaryMode">
+            <option value="box">Box</option>
+            <option value="bezier">Bezier</option>
+          </select>
+        </div>
+
+        <div id="bezierControls">
+          <div class="row">
+            <div class="row-head">
+              <label for="boundaryHalfHeight">Half Height</label>
+              <span class="value" id="boundaryHalfHeightVal">18.0</span>
+            </div>
+            <input id="boundaryHalfHeight" type="range" min="2.0" max="20.0" step="0.1" value="18.0" />
+          </div>
+
+          <div class="row">
+            <div class="row-head">
+              <label for="boundaryNeckWidth">Neck Width</label>
+              <span class="value" id="boundaryNeckWidthVal">20.0</span>
+            </div>
+            <input id="boundaryNeckWidth" type="range" min="1.0" max="80.0" step="0.1" value="20.0" />
+          </div>
+
+          <div class="row">
+            <div class="row-head">
+              <label for="boundaryEndWidth">End Width</label>
+              <span class="value" id="boundaryEndWidthVal">80.0</span>
+            </div>
+            <input id="boundaryEndWidth" type="range" min="1.0" max="80.0" step="0.1" value="80.0" />
+          </div>
+        </div>
+
+        <div class="switch-row">
+          <label for="viscosityEnabled">Artificial Viscosity</label>
+          <input id="viscosityEnabled" type="checkbox" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="viscosityC">Viscosity Strength</label>
+            <span class="value" id="viscosityCVal">0.000</span>
+          </div>
+          <input id="viscosityC" type="range" min="0.000" max="4.000" step="0.010" value="0.000" />
+        </div>
+
+        <div class="row">
+          <div class="row-head">
+            <label for="readback">Readback Frames</label>
+            <span class="value" id="readbackVal">2</span>
+          </div>
+          <input id="readback" type="range" min="1" max="6" step="1" value="2" />
+        </div>
+
         <section class="demo__controls">
           <button type="button" data-action="toggle">Pause</button>
           <button type="button" data-action="reset">Reset</button>
         </section>
+
+        <section class="demo__status">
+          <ul class="status-list">
+            <li>WebGPU: <strong data-field="support">${STATUS_SUPPORT_PENDING}</strong></li>
+            <li>State: <strong data-field="runState">${STATUS_RUN_STOPPED}</strong></li>
+            <li>Frames: <strong data-field="frameCount">0</strong></li>
+            <li>Particles: <strong data-field="particleCount">${PBF_SIMULATION_METADATA.particleCount}</strong></li>
+          </ul>
+        </section>
+        
         <div class="demo__message">${HELP_TEXT}</div>
       </aside>
+
+      <section class="demo__stage">
+        <canvas class="demo__canvas" width="${CANVAS_WIDTH}" height="${CANVAS_HEIGHT}"></canvas>
+        <div class="tag">GPU Compute + 2D Render</div>
+      </section>
     </section>
   `;
 
@@ -420,6 +829,40 @@ function createDemoDom(): DemoDom {
   const message = root.querySelector<HTMLDivElement>(".demo__message");
   const toggleButton = root.querySelector<HTMLButtonElement>('[data-action="toggle"]');
   const resetButton = root.querySelector<HTMLButtonElement>('[data-action="reset"]');
+  const solverModeSelect = root.querySelector<HTMLSelectElement>("#solverMode");
+  const iterInput = root.querySelector<HTMLInputElement>("#iter");
+  const iterValue = root.querySelector<HTMLElement>("#iterVal");
+  const hInput = root.querySelector<HTMLInputElement>("#hValInput");
+  const hValue = root.querySelector<HTMLElement>("#hVal");
+  const neighborRadiusInput = root.querySelector<HTMLInputElement>("#neighborRadius");
+  const neighborRadiusValue = root.querySelector<HTMLElement>("#neighborRadiusVal");
+  const lambdaEpsInput = root.querySelector<HTMLInputElement>("#lambdaEps");
+  const lambdaEpsValue = root.querySelector<HTMLElement>("#lambdaEpsVal");
+  const corrKInput = root.querySelector<HTMLInputElement>("#corrK");
+  const corrKValue = root.querySelector<HTMLElement>("#corrKVal");
+  const timeDeltaInput = root.querySelector<HTMLInputElement>("#timeDelta");
+  const timeDeltaValue = root.querySelector<HTMLElement>("#timeDeltaVal");
+  const massInput = root.querySelector<HTMLInputElement>("#mass");
+  const massValue = root.querySelector<HTMLElement>("#massVal");
+  const rho0Input = root.querySelector<HTMLInputElement>("#rho0");
+  const rho0Value = root.querySelector<HTMLElement>("#rho0Val");
+  const particleRadiusInput = root.querySelector<HTMLInputElement>("#particleRadius");
+  const particleRadiusValue = root.querySelector<HTMLElement>("#particleRadiusVal");
+  const particleCountValueLabel = root.querySelector<HTMLElement>("#particleCountVal");
+  const particleCountInput = root.querySelector<HTMLInputElement>("#particleCount");
+  const boundaryModeSelect = root.querySelector<HTMLSelectElement>("#boundaryMode");
+  const bezierControls = root.querySelector<HTMLDivElement>("#bezierControls");
+  const boundaryHalfHeightInput = root.querySelector<HTMLInputElement>("#boundaryHalfHeight");
+  const boundaryHalfHeightValue = root.querySelector<HTMLElement>("#boundaryHalfHeightVal");
+  const boundaryNeckWidthInput = root.querySelector<HTMLInputElement>("#boundaryNeckWidth");
+  const boundaryNeckWidthValue = root.querySelector<HTMLElement>("#boundaryNeckWidthVal");
+  const boundaryEndWidthInput = root.querySelector<HTMLInputElement>("#boundaryEndWidth");
+  const boundaryEndWidthValue = root.querySelector<HTMLElement>("#boundaryEndWidthVal");
+  const viscosityEnabledInput = root.querySelector<HTMLInputElement>("#viscosityEnabled");
+  const viscosityCInput = root.querySelector<HTMLInputElement>("#viscosityC");
+  const viscosityCValue = root.querySelector<HTMLElement>("#viscosityCVal");
+  const readbackInput = root.querySelector<HTMLInputElement>("#readback");
+  const readbackValue = root.querySelector<HTMLElement>("#readbackVal");
   const supportValue = root.querySelector<HTMLElement>('[data-field="support"]');
   const runStateValue = root.querySelector<HTMLElement>('[data-field="runState"]');
   const frameCountValue = root.querySelector<HTMLElement>('[data-field="frameCount"]');
@@ -430,6 +873,40 @@ function createDemoDom(): DemoDom {
     !message ||
     !toggleButton ||
     !resetButton ||
+    !solverModeSelect ||
+    !iterInput ||
+    !iterValue ||
+    !hInput ||
+    !hValue ||
+    !neighborRadiusInput ||
+    !neighborRadiusValue ||
+    !lambdaEpsInput ||
+    !lambdaEpsValue ||
+    !corrKInput ||
+    !corrKValue ||
+    !timeDeltaInput ||
+    !timeDeltaValue ||
+    !massInput ||
+    !massValue ||
+    !rho0Input ||
+    !rho0Value ||
+    !particleRadiusInput ||
+    !particleRadiusValue ||
+    !particleCountInput ||
+    !particleCountValueLabel ||
+    !boundaryModeSelect ||
+    !bezierControls ||
+    !boundaryHalfHeightInput ||
+    !boundaryHalfHeightValue ||
+    !boundaryNeckWidthInput ||
+    !boundaryNeckWidthValue ||
+    !boundaryEndWidthInput ||
+    !boundaryEndWidthValue ||
+    !viscosityEnabledInput ||
+    !viscosityCInput ||
+    !viscosityCValue ||
+    !readbackInput ||
+    !readbackValue ||
     !supportValue ||
     !runStateValue ||
     !frameCountValue ||
@@ -444,6 +921,40 @@ function createDemoDom(): DemoDom {
     message,
     toggleButton,
     resetButton,
+    solverModeSelect,
+    iterInput,
+    iterValue,
+    hInput,
+    hValue,
+    neighborRadiusInput,
+    neighborRadiusValue,
+    lambdaEpsInput,
+    lambdaEpsValue,
+    corrKInput,
+    corrKValue,
+    timeDeltaInput,
+    timeDeltaValue,
+    massInput,
+    massValue,
+    rho0Input,
+    rho0Value,
+    particleRadiusInput,
+    particleRadiusValue,
+    particleCountInput,
+    particleCountValueLabel,
+    boundaryModeSelect,
+    bezierControls,
+    boundaryHalfHeightInput,
+    boundaryHalfHeightValue,
+    boundaryNeckWidthInput,
+    boundaryNeckWidthValue,
+    boundaryEndWidthInput,
+    boundaryEndWidthValue,
+    viscosityEnabledInput,
+    viscosityCInput,
+    viscosityCValue,
+    readbackInput,
+    readbackValue,
     supportValue,
     runStateValue,
     frameCountValue,
