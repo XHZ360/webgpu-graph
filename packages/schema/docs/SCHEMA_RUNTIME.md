@@ -76,6 +76,24 @@ Factory 负责将 Schema 装配成真实 GPU 资源。
 - 创建 GPUShaderModule
 - 创建 Compute / Render Pipeline
 
+### Runtime capability negotiation
+
+当某份 Schema 在特定 stage 上需要超出 WebGPU 默认限制的资源数量时，运行时还需要在设备初始化前完成 capability negotiation。
+
+目标职责划分如下：
+
+- `schema` 提供足够的静态结构，使运行时可以推导所需 limits
+- `preview` 负责从 Schema 推导最小 `requiredLimits`
+- host（如 `website`）负责请求 `GPUAdapter` / `GPUDevice`，并将 `preview` 推导出的 `requiredLimits` 带入 `requestDevice()`
+
+这意味着：
+
+- Schema 不需要在当前阶段显式存储一份 `requiredLimits` 配置
+- Preview 应提供面向 host 的推导工具，而不是让 demo 代码硬编码 schema-specific limit
+- Host 只负责协商流程与错误呈现，不负责理解某个示例为何需要某个具体 limit
+
+首个落地范围只覆盖可由 Schema 静态推导的最小子集，例如 `maxStorageBuffersPerShaderStage`。
+
 ### 可视化与摘要
 
 Schema 还应支持：
@@ -133,3 +151,4 @@ async function stepSimulation(
 - RenderGraph 拓扑排序
 - Render 与 Compute Pass 分流执行
 - 资源状态转换和屏障策略
+- 基于 Schema 的运行时 capability 需求推导与对 host 协商流程的支撑

@@ -23,6 +23,24 @@
 
 当前工作重点不是继续扩写概念文档，而是让 `packages/schema` 从最小可运行实现开始，逐步对齐规格文档。
 
+## 当前迁移补充：Route A（运行时 device limits 协商）
+
+在保持当前 Compute 优先闭环不扩散范围的前提下，运行时 capability negotiation 采用以下迁移策略：
+
+1. `schema` 继续作为事实源，提供足以静态推导运行时 limits 的结构
+2. `preview` 新增从 Schema 推导 `requiredLimits` 的能力
+3. host（如 `website`）继续保留 `GPUAdapter` / `GPUDevice` 请求职责，但不再硬编码某个示例所需的具体 limit
+4. 第一阶段只覆盖可静态推导且已出现真实需求的 `maxStorageBuffersPerShaderStage`
+
+这样做的目的不是把 device 生命周期整体迁入 `preview`，而是先把“schema-specific limit knowledge”从 demo 代码上提为 preview 的正式运行时能力。
+
+### 该阶段完成标志
+
+- `preview` 能根据给定 Schema 返回最小 `requiredLimits`
+- `website` 使用 `preview` 的推导结果请求 device，而不是写死示例常量
+- PBF demo 在支持该 limit 的设备上可继续运行
+- 浏览器中不再出现此前由未协商 limit 导致的 WebGPU warning
+
 ## 维护建议
 
 1. 根 README 只保留仓库入口信息，链接到拆分后的文档
