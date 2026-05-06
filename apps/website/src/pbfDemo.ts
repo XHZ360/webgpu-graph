@@ -5,7 +5,7 @@ import {
   PBF_DEFAULT_SIMULATION_PARAMS,
   PBF_SIMULATION_METADATA,
 } from "schema/examples/pbf-simulation";
-import { SimulationRunner, createDispatchExecutionContext } from "preview";
+import { SimulationRunner, createDispatchExecutionContext, getRequiredDeviceLimits } from "preview";
 import { ParticleCanvasRenderer } from "./render2d.ts";
 
 export interface PbfDemoHandle {
@@ -67,6 +67,11 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
 
   const setMessage = (message: string): void => {
     dom.message.textContent = message;
+  };
+
+  const reportWarning = (message: string): void => {
+    console.warn(message);
+    setMessage(`${HELP_TEXT} ${message}`);
   };
 
   const setSupportState = (value: string): void => {
@@ -140,7 +145,9 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     renderer.render(initialState.positions);
   };
 
-  const requestDevice = async (): Promise<GPUDevice | null> => {
+  const requestDevice = async (
+    schema: ReturnType<typeof createPbfSimulationSchema>,
+  ): Promise<GPUDevice | null> => {
     if (!("gpu" in navigator)) {
       return null;
     }
@@ -148,6 +155,24 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) {
       return null;
+    }
+
+    const requiredLimits = getRequiredDeviceLimits(schema);
+
+    if (
+      requiredLimits.maxStorageBuffersPerShaderStage !== undefined &&
+      adapter.limits.maxStorageBuffersPerShaderStage <
+        requiredLimits.maxStorageBuffersPerShaderStage
+    ) {
+      throw new Error("This adapter does not satisfy the schema-required WebGPU limits.");
+    }
+
+    if (requiredLimits.maxStorageBuffersPerShaderStage !== undefined) {
+      return adapter.requestDevice({
+        requiredLimits: {
+          maxStorageBuffersPerShaderStage: requiredLimits.maxStorageBuffersPerShaderStage,
+        },
+      });
     }
 
     return adapter.requestDevice();
@@ -160,7 +185,8 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     setMessage(HELP_TEXT);
     dom.particleCountValue.textContent = `${PBF_SIMULATION_METADATA.particleCount}`;
 
-    const device = await requestDevice();
+    const schema = createPbfSimulationSchema();
+    const device = await requestDevice(schema);
     if (!device) {
       running = false;
       setSupportState(STATUS_SUPPORT_UNAVAILABLE);
@@ -173,7 +199,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       return;
     }
 
-    device.lost.then((info) => {
+    void device.lost.then((info) => {
       if (disposed) {
         return;
       }
@@ -181,10 +207,17 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       failDemo(`WebGPU device was lost.${reason}`.trim());
     });
 
+    device.addEventListener("uncapturederror", (event) => {
+      if (disposed) {
+        return;
+      }
+      reportWarning(`WebGPU reported an uncaptured error: ${event.error.message}`);
+    });
+
     const state: SimulationState = {
       device,
       runner: new SimulationRunner({
-        schema: createPbfSimulationSchema(),
+        schema,
         device,
         context: createDispatchExecutionContext({
           params: {
@@ -192,7 +225,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
             workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
           },
           reportError(message) {
-            setMessage(`${HELP_TEXT} ${message}`);
+            reportWarning(message);
           },
         }),
       }),
@@ -278,7 +311,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
               workgroupSize: PBF_SIMULATION_METADATA.workgroupSize,
             },
             reportError(message) {
-              setMessage(`${HELP_TEXT} ${message}`);
+              reportWarning(message);
             },
           }),
         }),

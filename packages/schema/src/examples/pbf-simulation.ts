@@ -677,7 +677,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 const bufferPositions: BufferBindingSchema = createStorageBufferSchema(
   "positions",
   NUM_PARTICLES * 8,
-  { mappable: true },
 );
 
 const bufferOldPositions: BufferBindingSchema = createStorageBufferSchema(

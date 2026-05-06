@@ -90,8 +90,8 @@ describe("PBF Simulation Schema", () => {
     expect(layout.bindings).toHaveLength(1);
   });
 
-  it("bositions buffer is mappable", () => {
-    expect(schema.buffers["positions"].mappable).toBe(true);
+  it("positions buffer is not directly mappable", () => {
+    expect(schema.buffers["positions"].mappable).toBeUndefined();
   });
 
   it("simParams buffer is uniform type", () => {

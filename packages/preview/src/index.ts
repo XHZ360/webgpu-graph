@@ -7,6 +7,7 @@ export {
   evaluateDispatchExpression,
 } from "./dispatchExecutionContext.ts";
 export type { CreateDispatchExecutionContextOptions } from "./dispatchExecutionContext.ts";
+export { getRequiredDeviceLimits } from "./deviceLimits.ts";
 
 export type PreviewFrame = {
   html: string;
