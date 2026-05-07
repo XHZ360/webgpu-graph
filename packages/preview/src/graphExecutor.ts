@@ -3,6 +3,9 @@ import type {
   ComputePassSchema,
   SchemaExecutionContext,
   DispatchValue,
+  RenderGraphNodeSchema,
+  RenderGraphIterationCountSchema,
+  RenderGraphSchema,
 } from "schema";
 
 export interface GraphExecutorOptions {
@@ -22,12 +25,7 @@ export class GraphExecutor {
     this.bindGroups = options.bindGroups;
   }
 
-  private topologicalSort(): string[] {
-    const graph = this.schema.renderGraphs[this.schema.mainGraphRef];
-    if (!graph) {
-      return [];
-    }
-
+  private topologicalSort(graph: RenderGraphSchema): RenderGraphNodeSchema[] {
     const nodes = graph.nodes;
     const nodeNames = new Set(nodes.map((n) => n.name));
     const adjacency = new Map<string, string[]>();
@@ -54,10 +52,14 @@ export class GraphExecutor {
       if (degree === 0) queue.push(name);
     }
 
-    const sorted: string[] = [];
+    const sorted: RenderGraphNodeSchema[] = [];
+    const nodeMap = new Map(nodes.map((node) => [node.name, node]));
     while (queue.length > 0) {
       const current = queue.shift()!;
-      sorted.push(current);
+      const node = nodeMap.get(current);
+      if (node) {
+        sorted.push(node);
+      }
       for (const neighbor of adjacency.get(current) ?? []) {
         const newDegree = (inDegree.get(neighbor) ?? 1) - 1;
         inDegree.set(neighbor, newDegree);
@@ -86,17 +88,6 @@ export class GraphExecutor {
     return 1;
   }
 
-  private getComputePass(passRef: string): ComputePassSchema {
-    const pass = this.schema.passes[passRef];
-    if (!pass) {
-      throw new Error(`Compute pass reference "${passRef}" not found in schema`);
-    }
-    if (pass.type !== "compute") {
-      throw new Error(`Pass "${passRef}" is not a compute pass`);
-    }
-    return pass;
-  }
-
   private getNumericContextParam(
     context: SchemaExecutionContext | undefined,
     name: string,
@@ -105,35 +96,23 @@ export class GraphExecutor {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
   }
 
-  private getPbfIterationCount(context?: SchemaExecutionContext): number {
-    const iterations = this.getNumericContextParam(context, "pbfIterations");
-    if (iterations !== null) {
+  private resolveIterationCount(
+    iterations: RenderGraphIterationCountSchema,
+    context?: SchemaExecutionContext,
+  ): number {
+    if (typeof iterations === "number") {
       return Math.max(0, Math.floor(iterations));
     }
 
-    const legacyIterations = this.getNumericContextParam(context, "iterationCount");
-    if (legacyIterations !== null) {
-      return Math.max(0, Math.floor(legacyIterations));
+    const value = this.getNumericContextParam(context, iterations.param);
+    if (value !== null) {
+      return Math.max(0, Math.floor(value));
     }
 
     context?.reportError(
-      "PBF iterative execution requested but no pbfIterations/iterationCount param was provided. Falling back to 1 iteration.",
+      `Render subgraph iteration requested but no numeric param named "${iterations.param}" was provided. Falling back to 1 iteration.`,
     );
     return 1;
-  }
-
-  private shouldUseIterativePbfExecution(): boolean {
-    const requiredPasses = [
-      "pass-prologue",
-      "pass-clear-grid",
-      "pass-build-grid",
-      "pass-pbf-lambda",
-      "pass-pbf-delta",
-      "pass-apply-delta",
-      "pass-epilogue",
-    ];
-
-    return requiredPasses.every((passRef) => passRef in this.schema.passes);
   }
 
   private executeComputePass(
@@ -169,56 +148,48 @@ export class GraphExecutor {
     computePass.end();
   }
 
-  private executeIterativePbfGraph(
+  private executeNode(
     commandEncoder: GPUCommandEncoder,
+    node: RenderGraphNodeSchema,
     context?: SchemaExecutionContext,
   ): void {
-    const prologue = this.getComputePass("pass-prologue");
-    const clearGrid = this.getComputePass("pass-clear-grid");
-    const buildGrid = this.getComputePass("pass-build-grid");
-    const lambda = this.getComputePass("pass-pbf-lambda");
-    const delta = this.getComputePass("pass-pbf-delta");
-    const applyDelta = this.getComputePass("pass-apply-delta");
-    const epilogue = this.getComputePass("pass-epilogue");
-
-    this.executeComputePass(commandEncoder, prologue, context);
-
-    const iterations = this.getPbfIterationCount(context);
-    for (let index = 0; index < iterations; index += 1) {
-      this.executeComputePass(commandEncoder, clearGrid, context);
-      this.executeComputePass(commandEncoder, buildGrid, context);
-      this.executeComputePass(commandEncoder, lambda, context);
-      this.executeComputePass(commandEncoder, delta, context);
-      this.executeComputePass(commandEncoder, applyDelta, context);
-    }
-
-    this.executeComputePass(commandEncoder, epilogue, context);
-  }
-
-  execute(commandEncoder: GPUCommandEncoder, context?: SchemaExecutionContext): void {
-    const graph = this.schema.renderGraphs[this.schema.mainGraphRef];
-    if (!graph) {
-      throw new Error(`mainGraphRef "${this.schema.mainGraphRef}" not found in renderGraphs`);
-    }
-
-    if (this.shouldUseIterativePbfExecution()) {
-      this.executeIterativePbfGraph(commandEncoder, context);
+    if (node.kind === "subgraph") {
+      const iterations = this.resolveIterationCount(node.iterations, context);
+      for (let index = 0; index < iterations; index += 1) {
+        this.executeGraph(commandEncoder, node.graphRef, context);
+      }
       return;
     }
 
-    const sortedNodeNames = this.topologicalSort();
-    const nodeMap = new Map(graph.nodes.map((n) => [n.name, n]));
-
-    for (const nodeName of sortedNodeNames) {
-      const node = nodeMap.get(nodeName);
-      if (!node) continue;
-
-      const passSchema = this.schema.passes[node.passRef];
-      if (!passSchema) continue;
-
-      if (passSchema.type === "compute") {
-        this.executeComputePass(commandEncoder, passSchema, context);
-      }
+    const passSchema = this.schema.passes[node.passRef];
+    if (!passSchema) {
+      throw new Error(
+        `Pass reference "${node.passRef}" not found for render graph node "${node.name}"`,
+      );
     }
+
+    if (passSchema.type === "compute") {
+      this.executeComputePass(commandEncoder, passSchema, context);
+    }
+  }
+
+  private executeGraph(
+    commandEncoder: GPUCommandEncoder,
+    graphRef: string,
+    context?: SchemaExecutionContext,
+  ): void {
+    const graph = this.schema.renderGraphs[graphRef];
+    if (!graph) {
+      throw new Error(`Render graph reference "${graphRef}" not found in schema`);
+    }
+
+    const sortedNodes = this.topologicalSort(graph);
+    for (const node of sortedNodes) {
+      this.executeNode(commandEncoder, node, context);
+    }
+  }
+
+  execute(commandEncoder: GPUCommandEncoder, context?: SchemaExecutionContext): void {
+    this.executeGraph(commandEncoder, this.schema.mainGraphRef, context);
   }
 }
