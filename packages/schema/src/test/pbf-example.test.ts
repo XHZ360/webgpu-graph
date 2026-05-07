@@ -71,7 +71,7 @@ describe("PBF Simulation Schema", () => {
   });
 
   it("has correct number of render graphs", () => {
-    expect(Object.keys(schema.renderGraphs)).toHaveLength(1);
+    expect(Object.keys(schema.renderGraphs)).toHaveLength(2);
   });
 
   it("has correct main graph reference", () => {
@@ -92,22 +92,36 @@ describe("PBF Simulation Schema", () => {
     expect(schema.buffers["simParams"].type).toBe("uniform");
   });
 
-  it("render graph has 7 nodes", () => {
+  it("main render graph has 3 nodes", () => {
     const graph = schema.renderGraphs["main-simulation-graph"];
-    expect(graph.nodes).toHaveLength(7);
+    expect(graph.nodes).toHaveLength(3);
   });
 
-  it("render graph nodes have correct dependency chain", () => {
+  it("main render graph has prologue -> subgraph -> epilogue flow", () => {
     const graph = schema.renderGraphs["main-simulation-graph"];
     const nodeMap = new Map(graph.nodes.map((n) => [n.name, n]));
 
     expect(nodeMap.get("node-prologue")!.dependencies).toBeUndefined();
-    expect(nodeMap.get("node-clear-grid")!.dependencies).toEqual(["node-prologue"]);
+    expect(nodeMap.get("node-pbf-iterations")).toEqual({
+      name: "node-pbf-iterations",
+      kind: "subgraph",
+      graphRef: "pbf-iteration-graph",
+      iterations: { param: "pbfIterations" },
+      dependencies: ["node-prologue"],
+    });
+    expect(nodeMap.get("node-epilogue")!.dependencies).toEqual(["node-pbf-iterations"]);
+  });
+
+  it("iteration render graph has the solver dependency chain", () => {
+    const graph = schema.renderGraphs["pbf-iteration-graph"];
+    const nodeMap = new Map(graph.nodes.map((n) => [n.name, n]));
+
+    expect(graph.nodes).toHaveLength(5);
+    expect(nodeMap.get("node-clear-grid")!.dependencies).toBeUndefined();
     expect(nodeMap.get("node-build-grid")!.dependencies).toEqual(["node-clear-grid"]);
     expect(nodeMap.get("node-pbf-lambda")!.dependencies).toEqual(["node-build-grid"]);
     expect(nodeMap.get("node-pbf-delta")!.dependencies).toEqual(["node-pbf-lambda"]);
     expect(nodeMap.get("node-apply-delta")!.dependencies).toEqual(["node-pbf-delta"]);
-    expect(nodeMap.get("node-epilogue")!.dependencies).toEqual(["node-apply-delta"]);
   });
 
   it("pbf-lambda pipeline uses the shared layout", () => {

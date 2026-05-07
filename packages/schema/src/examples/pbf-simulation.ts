@@ -913,12 +913,25 @@ const mainRenderGraph: RenderGraphSchema = {
   name: "main-simulation-graph",
   nodes: [
     { name: "node-prologue", passRef: "pass-prologue" },
-    { name: "node-clear-grid", passRef: "pass-clear-grid", dependencies: ["node-prologue"] },
+    {
+      name: "node-pbf-iterations",
+      kind: "subgraph",
+      graphRef: "pbf-iteration-graph",
+      iterations: { param: "pbfIterations" },
+      dependencies: ["node-prologue"],
+    },
+    { name: "node-epilogue", passRef: "pass-epilogue", dependencies: ["node-pbf-iterations"] },
+  ],
+};
+
+const pbfIterationRenderGraph: RenderGraphSchema = {
+  name: "pbf-iteration-graph",
+  nodes: [
+    { name: "node-clear-grid", passRef: "pass-clear-grid" },
     { name: "node-build-grid", passRef: "pass-build-grid", dependencies: ["node-clear-grid"] },
     { name: "node-pbf-lambda", passRef: "pass-pbf-lambda", dependencies: ["node-build-grid"] },
     { name: "node-pbf-delta", passRef: "pass-pbf-delta", dependencies: ["node-pbf-lambda"] },
     { name: "node-apply-delta", passRef: "pass-apply-delta", dependencies: ["node-pbf-delta"] },
-    { name: "node-epilogue", passRef: "pass-epilogue", dependencies: ["node-apply-delta"] },
   ],
 };
 
@@ -983,6 +996,7 @@ export const pbfSimulationSchema: WebGpuSimulationSchema = {
 
   renderGraphs: {
     "main-simulation-graph": mainRenderGraph,
+    "pbf-iteration-graph": pbfIterationRenderGraph,
   },
 
   mainGraphRef: "main-simulation-graph",
@@ -1025,7 +1039,8 @@ export function createPbfSimulationSchema(): WebGpuSimulationSchema {
     .addPass(passPbfDelta)
     .addPass(passApplyDelta)
     .addPass(passEpilogue)
-    .addRenderGraph(mainRenderGraph);
+    .addRenderGraph(mainRenderGraph)
+    .addRenderGraph(pbfIterationRenderGraph);
 
   return builder.build("PBF-WebGPU-Simulation", "1.0.0");
 }
