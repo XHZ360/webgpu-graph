@@ -34,7 +34,16 @@ export type {
   DispatchExpression,
   SchemaExecutionContext,
 } from "./types/pass.ts";
-export type { RenderGraphNodeSchema, RenderGraphSchema } from "./types/renderGraph.ts";
+export type {
+  RenderGraphNodeResourcesSchema,
+  RenderGraphNodeBaseSchema,
+  RenderGraphPassNodeSchema,
+  RenderGraphIterationParamSchema,
+  RenderGraphIterationCountSchema,
+  RenderGraphSubgraphNodeSchema,
+  RenderGraphNodeSchema,
+  RenderGraphSchema,
+} from "./types/renderGraph.ts";
 export type {
   WebGpuSimulationSchema,
   BuffersSchemaMap,
