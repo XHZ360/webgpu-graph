@@ -126,6 +126,32 @@ describe("DefaultSchemaValidator", () => {
       expect(result.valid).toBe(false);
       expect(result.errors.some((e) => e.rule === "MISSING_REF")).toBe(true);
     });
+
+    it("detects missing subgraph reference", () => {
+      const schema = buildMinimalSchema({
+        renderGraphs: {
+          "main-graph": {
+            name: "main-graph",
+            nodes: [
+              {
+                name: "loop",
+                kind: "subgraph",
+                graphRef: "missing-graph",
+                iterations: 5,
+              },
+            ],
+          },
+        },
+      });
+      const result = new DefaultSchemaValidator().validate(schema);
+      expect(result.valid).toBe(false);
+      expect(
+        result.errors.some(
+          (e) =>
+            e.rule === "MISSING_REF" && e.path === "renderGraphs.main-graph.nodes.loop.graphRef",
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("RENDER_GRAPH_CYCLE", () => {
@@ -161,6 +187,68 @@ describe("DefaultSchemaValidator", () => {
       });
       const result = new DefaultSchemaValidator().validate(schema);
       expect(result.errors.some((e) => e.rule === "RENDER_GRAPH_CYCLE")).toBe(false);
+    });
+
+    it("detects graph reference cycles across subgraphs", () => {
+      const schema = buildMinimalSchema({
+        renderGraphs: {
+          "main-graph": {
+            name: "main-graph",
+            nodes: [
+              {
+                name: "loop-a",
+                kind: "subgraph",
+                graphRef: "iteration-graph",
+                iterations: 5,
+              },
+            ],
+          },
+          "iteration-graph": {
+            name: "iteration-graph",
+            nodes: [
+              {
+                name: "loop-b",
+                kind: "subgraph",
+                graphRef: "main-graph",
+                iterations: 1,
+              },
+            ],
+          },
+        },
+      });
+      const result = new DefaultSchemaValidator().validate(schema);
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.rule === "RENDER_GRAPH_CYCLE")).toBe(true);
+    });
+
+    it("allows acyclic subgraph references", () => {
+      const schema = buildMinimalSchema({
+        renderGraphs: {
+          "main-graph": {
+            name: "main-graph",
+            nodes: [
+              {
+                name: "prologue",
+                passRef: "sim-pass",
+              },
+              {
+                name: "loop",
+                kind: "subgraph",
+                graphRef: "iteration-graph",
+                iterations: { param: "pbfIterations" },
+                dependencies: ["prologue"],
+              },
+            ],
+          },
+          "iteration-graph": {
+            name: "iteration-graph",
+            nodes: [{ name: "iter-pass", passRef: "sim-pass" }],
+          },
+        },
+      });
+      const result = new DefaultSchemaValidator().validate(schema);
+      expect(result.errors.some((e) => e.rule === "RENDER_GRAPH_CYCLE")).toBe(false);
+      expect(result.errors.some((e) => e.rule === "MISSING_REF")).toBe(false);
     });
   });
 

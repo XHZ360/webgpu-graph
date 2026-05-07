@@ -95,7 +95,15 @@ export function checkMissingReferences(schema: WebGpuSimulationSchema): Validati
 
   for (const [graphName, graph] of Object.entries(schema.renderGraphs)) {
     for (const node of graph.nodes) {
-      if (!schema.passes[node.passRef]) {
+      if (node.kind === "subgraph") {
+        if (!schema.renderGraphs[node.graphRef]) {
+          errors.push({
+            rule: "MISSING_REF",
+            message: `RenderGraph "${graphName}" node "${node.name}" references graph "${node.graphRef}" which does not exist`,
+            path: `renderGraphs.${graphName}.nodes.${node.name}.graphRef`,
+          });
+        }
+      } else if (!schema.passes[node.passRef]) {
         errors.push({
           rule: "MISSING_REF",
           message: `RenderGraph "${graphName}" node "${node.name}" references pass "${node.passRef}" which does not exist`,

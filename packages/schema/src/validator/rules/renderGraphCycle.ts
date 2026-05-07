@@ -49,6 +49,49 @@ function hasCycle(graph: RenderGraphSchema): string[] | null {
   return remaining;
 }
 
+function collectGraphReferences(graph: RenderGraphSchema): string[] {
+  return graph.nodes.filter((node) => node.kind === "subgraph").map((node) => node.graphRef);
+}
+
+function findGraphReferenceCycle(schema: WebGpuSimulationSchema): string[] | null {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  function visit(graphName: string, path: string[]): string[] | null {
+    if (visiting.has(graphName)) {
+      const cycleStart = path.indexOf(graphName);
+      return cycleStart >= 0 ? path.slice(cycleStart) : [graphName];
+    }
+
+    if (visited.has(graphName)) {
+      return null;
+    }
+
+    visiting.add(graphName);
+    const graph = schema.renderGraphs[graphName];
+    if (graph) {
+      for (const ref of collectGraphReferences(graph)) {
+        const cycle = visit(ref, [...path, ref]);
+        if (cycle) {
+          return cycle;
+        }
+      }
+    }
+    visiting.delete(graphName);
+    visited.add(graphName);
+    return null;
+  }
+
+  for (const graphName of Object.keys(schema.renderGraphs)) {
+    const cycle = visit(graphName, [graphName]);
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
+}
+
 export function checkRenderGraphCycles(schema: WebGpuSimulationSchema): ValidationError[] {
   const errors: ValidationError[] = [];
 
@@ -61,6 +104,15 @@ export function checkRenderGraphCycles(schema: WebGpuSimulationSchema): Validati
         path: `renderGraphs.${graphName}`,
       });
     }
+  }
+
+  const graphReferenceCycle = findGraphReferenceCycle(schema);
+  if (graphReferenceCycle) {
+    errors.push({
+      rule: "RENDER_GRAPH_CYCLE",
+      message: `RenderGraph graph references have a cycle involving: ${graphReferenceCycle.join(" -> ")}`,
+      path: "renderGraphs",
+    });
   }
 
   return errors;

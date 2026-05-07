@@ -91,6 +91,34 @@ describe("DefaultSchemaBuilder", () => {
     expect(schema.mainGraphRef).toBe("graph-b");
   });
 
+  it("accepts render graphs with subgraph nodes", () => {
+    const schema = new DefaultSchemaBuilder()
+      .addRenderGraph({
+        name: "iteration-graph",
+        nodes: [],
+      })
+      .addRenderGraph({
+        name: "main-graph",
+        nodes: [
+          {
+            name: "loop",
+            kind: "subgraph",
+            graphRef: "iteration-graph",
+            iterations: { param: "pbfIterations" },
+          },
+        ],
+      } satisfies RenderGraphSchema)
+      .setMainGraphRef("main-graph")
+      .build("Test", "1.0.0");
+
+    expect(schema.renderGraphs["main-graph"].nodes[0]).toEqual({
+      name: "loop",
+      kind: "subgraph",
+      graphRef: "iteration-graph",
+      iterations: { param: "pbfIterations" },
+    });
+  });
+
   it("throws on duplicate buffer name", () => {
     const builder = new DefaultSchemaBuilder().addBuffer(
       createStorageBufferSchema("positions", 1200),
