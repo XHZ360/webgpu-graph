@@ -9,11 +9,16 @@
     "preview": "vp preview"
   },
   "dependencies": {
+    "@xyflow/react": "catalog:",
     "editor": "workspace:*",
     "preview": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "schema": "workspace:*"
   },
   "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

@@ -18,8 +18,9 @@
 - `applyEditorOperation(session, operation)`：通过显式操作更新草稿，并返回新会话或失败诊断
 - `requestDraftPreviewHandoff(session)`：显式请求把当前草稿交给 preview/runtime；只有验证通过的草稿会返回克隆后的 Schema payload
 - `inspectSchema(schema)`：返回结构摘要、Mermaid 文本和图数据
+- `createVisualProjection(schema, options?)`：从 `inspectSchema(schema)` / Schema 数据派生 renderer-neutral 视觉投影，供网站层映射到具体画布渲染器
 - `getNodeDetail(schema, nodeId)`：按编辑器节点 ID 返回节点详情
-- `EditorState`、`EditorDraftSession`、`EditorOperation`、`EditorOperationResult`、`DraftPreviewHandoffResult`、`EditorNode`、`EditorEdge`、`GraphData`、`SchemaInspection` 等类型
+- `EditorState`、`EditorDraftSession`、`EditorOperation`、`EditorOperationResult`、`DraftPreviewHandoffResult`、`EditorNode`、`EditorEdge`、`GraphData`、`SchemaInspection`、`VisualProjection`、`VisualNode`、`VisualEdge` 等类型
 
 ## Inspector 契约
 
@@ -32,6 +33,19 @@
 - 能按节点 ID 查看 buffer、layout、bindGroup、shader、pipeline、pass、renderGraph 详情
 - 不修改传入的 Schema
 - 不依赖 `GPUDevice`、`SimulationRunner` 或 preview 执行循环
+
+## Visual Projection Contract
+
+`createVisualProjection(schema, options?)` 提供只读视觉画布的中立数据契约。它只从 `inspectSchema(schema)` 生成的 inspection graph 与传入 Schema / validator diagnostics 派生数据，不消费 React Flow、XYFlow 或任何 renderer state。
+
+投影包含：
+
+- `nodes` / `edges`：稳定 ID、类型、标签、语义 edge meaning、badge、severity、source reference 与 typed metadata
+- `groups`：资源、绑定、程序、执行与 render graph 的语义分组
+- `capabilities` / `editability`：未来交互能力的描述性元数据；当前 `editable`、`connectable`、`draggable` 和 `persistableLayout` 均为 `false`
+- `diagnostics` / `severity`：当 validator diagnostics 可用时提供 canvas-level severity；当前不会把 React Flow 状态作为诊断或 schema 来源
+
+网站层可以把该投影映射成 React Flow 节点和边，但 `editor` 包不会导出 React Flow 类型，也不会持久化布局、创建边、删除边或修改 Schema。
 
 ## Minimal Designer Edit Contract
 

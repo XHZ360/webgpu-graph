@@ -3,6 +3,7 @@ import "./styles.css";
 import { mountPbfDemo } from "./pbfDemo.ts";
 import { mountSchemaDesigner } from "./schemaDesigner.ts";
 import { mountSchemaInspector } from "./schemaInspector.ts";
+import { mountSchemaVisualCanvas } from "./schemaVisualCanvas.tsx";
 
 type FatalContext = {
   reason: string;
@@ -13,6 +14,7 @@ const APP_SHELL = `
   <div data-mount="pbf-demo"></div>
   <div data-mount="schema-designer"></div>
   <div data-mount="schema-inspector"></div>
+  <div data-mount="schema-visual-canvas"></div>
 `;
 
 function showFatalError(target: HTMLElement, context: FatalContext): void {
@@ -83,22 +85,27 @@ function bootstrap(): void {
   const demoMount = app.querySelector<HTMLElement>('[data-mount="pbf-demo"]');
   const designerMount = app.querySelector<HTMLElement>('[data-mount="schema-designer"]');
   const inspectorMount = app.querySelector<HTMLElement>('[data-mount="schema-inspector"]');
+  const visualCanvasMount = app.querySelector<HTMLElement>('[data-mount="schema-visual-canvas"]');
 
-  if (!demoMount || !designerMount || !inspectorMount) {
+  if (!demoMount || !designerMount || !inspectorMount || !visualCanvasMount) {
     showFatalError(app, {
       reason: "Missing application mount point.",
       details:
-        "Expected demo, schema designer, and schema inspector mount elements before initialization.",
+        "Expected demo, schema designer, schema inspector, and schema visual canvas mount elements before initialization.",
     });
     return;
   }
 
   const previewHandle = Promise.resolve(mountPbfDemo(demoMount));
+  const visualCanvasHandle = mountSchemaVisualCanvas(visualCanvasMount);
 
   mountSchemaDesigner(designerMount, {
     async onPreviewHandoff(handoff) {
       const handle = await previewHandle;
       return handle.acceptPreviewSchema(handoff);
+    },
+    onCanvasStateChange(state) {
+      visualCanvasHandle.update(state);
     },
   });
   mountSchemaInspector(inspectorMount);

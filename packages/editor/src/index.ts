@@ -34,6 +34,125 @@ export interface GraphData {
   edges: EditorEdge[];
 }
 
+export type VisualSeverity = "none" | "info" | "warning" | "error";
+
+export type VisualNodeKind = EditorNode["type"];
+
+export type VisualEdgeMeaning =
+  | "uses-layout"
+  | "binds-resource"
+  | "references-layout"
+  | "uses-shader"
+  | "uses-bind-group-layout"
+  | "uses-pipeline"
+  | "uses-bind-group"
+  | "contains-pass"
+  | "contains-subgraph"
+  | "depends-on"
+  | "references";
+
+export type VisualBadgeTone = "neutral" | "info" | "success" | "warning" | "danger";
+
+export type VisualSourceEntityType = VisualNodeKind | "edge" | "schema";
+
+export interface VisualSourceReference {
+  id: string;
+  entityType: VisualSourceEntityType;
+  schemaPath: string;
+}
+
+export interface VisualBadge {
+  id: string;
+  label: string;
+  tone: VisualBadgeTone;
+}
+
+export interface VisualCapabilities {
+  selectable: boolean;
+  focusable: boolean;
+  inspectable: boolean;
+  editable: boolean;
+  connectable: boolean;
+  draggable: boolean;
+  persistableLayout: boolean;
+}
+
+export interface VisualEditabilityMetadata {
+  readonly: boolean;
+  reason: string;
+  deferredCapabilities: string[];
+}
+
+export interface VisualNodeMetadata {
+  kind: VisualNodeKind;
+  properties: Record<string, unknown>;
+}
+
+export interface VisualEdgeMetadata {
+  meaning: VisualEdgeMeaning;
+  label: string;
+}
+
+export interface VisualNode {
+  id: string;
+  kind: VisualNodeKind;
+  label: string;
+  groupId: string;
+  badges: VisualBadge[];
+  severity: VisualSeverity;
+  sourceRef: VisualSourceReference;
+  capabilities: VisualCapabilities;
+  editability: VisualEditabilityMetadata;
+  metadata: VisualNodeMetadata;
+}
+
+export interface VisualEdge {
+  id: string;
+  from: string;
+  to: string;
+  label: string;
+  meaning: VisualEdgeMeaning;
+  badges: VisualBadge[];
+  severity: VisualSeverity;
+  sourceRef: VisualSourceReference;
+  capabilities: VisualCapabilities;
+  editability: VisualEditabilityMetadata;
+  metadata: VisualEdgeMetadata;
+}
+
+export interface VisualGroup {
+  id: string;
+  label: string;
+  kind: "resources" | "bindings" | "programs" | "execution" | "graphs";
+  sourceRef: VisualSourceReference;
+  capabilities: VisualCapabilities;
+  editability: VisualEditabilityMetadata;
+}
+
+export interface VisualProjectionDiagnostics {
+  severity: Exclude<VisualSeverity, "none">;
+  rule: string;
+  message: string;
+  sourceRef: VisualSourceReference;
+}
+
+export interface VisualProjection {
+  sourceOfTruth: "schema";
+  derivedFrom: "inspectSchema";
+  nodes: VisualNode[];
+  edges: VisualEdge[];
+  groups: VisualGroup[];
+  severity: VisualSeverity;
+  diagnostics: VisualProjectionDiagnostics[];
+  capabilities: VisualCapabilities;
+  editability: VisualEditabilityMetadata;
+}
+
+export interface VisualProjectionOptions {
+  diagnostics?: ValidationError[];
+  validate?: boolean;
+}
+
 export interface SchemaInspection {
   summary: StructuralSummary;
   mermaid: string;
@@ -321,6 +440,237 @@ export function inspectSchema(schema: WebGpuSimulationSchema): SchemaInspection 
   const graph = buildGraphData(schema);
 
   return { summary, mermaid, graph };
+}
+
+export function createVisualProjection(
+  schema: WebGpuSimulationSchema,
+  options: VisualProjectionOptions = {},
+): VisualProjection {
+  const inspection = inspectSchema(schema);
+  const diagnostics =
+    options.diagnostics ??
+    (options.validate === false ? [] : new DefaultSchemaValidator().validate(schema).errors);
+  const projectionDiagnostics: VisualProjectionDiagnostics[] = diagnostics.map((diagnostic) => ({
+    severity: "error" as const,
+    rule: diagnostic.rule,
+    message: diagnostic.message,
+    sourceRef: createSourceReference("schema", "schema", diagnostic.path ?? ""),
+  }));
+  const severity: VisualSeverity = projectionDiagnostics.length > 0 ? "error" : "none";
+  const capabilities = createReadonlyCapabilities();
+  const editability = createReadonlyEditability();
+
+  const nodes: VisualNode[] = inspection.graph.nodes.map((node) => ({
+    id: node.id,
+    kind: node.type,
+    label: node.label,
+    groupId: getVisualGroupId(node.type),
+    badges: createNodeBadges(node),
+    severity,
+    sourceRef: createNodeSourceReference(node),
+    capabilities,
+    editability,
+    metadata: {
+      kind: node.type,
+      properties: cloneValue(node.properties),
+    },
+  }));
+
+  const edges: VisualEdge[] = inspection.graph.edges.map((edge) => {
+    const meaning = getVisualEdgeMeaning(edge);
+    return {
+      id: createVisualEdgeId(edge, meaning),
+      from: edge.from,
+      to: edge.to,
+      label: edge.label,
+      meaning,
+      badges: createEdgeBadges(edge, meaning),
+      severity,
+      sourceRef: createEdgeSourceReference(edge, meaning),
+      capabilities,
+      editability,
+      metadata: {
+        meaning,
+        label: edge.label,
+      },
+    };
+  });
+
+  return {
+    sourceOfTruth: "schema",
+    derivedFrom: "inspectSchema",
+    nodes,
+    edges,
+    groups: createVisualGroups(),
+    severity,
+    diagnostics: projectionDiagnostics,
+    capabilities,
+    editability,
+  };
+}
+
+function createReadonlyCapabilities(): VisualCapabilities {
+  return {
+    selectable: true,
+    focusable: true,
+    inspectable: true,
+    editable: false,
+    connectable: false,
+    draggable: false,
+    persistableLayout: false,
+  };
+}
+
+function createReadonlyEditability(): VisualEditabilityMetadata {
+  return {
+    readonly: true,
+    reason: "Visual projection is derived from schema inspection data and does not mutate schema.",
+    deferredCapabilities: ["schema-editing", "edge-editing", "drag-layout-persistence"],
+  };
+}
+
+function createVisualGroups(): VisualGroup[] {
+  const capabilities = createReadonlyCapabilities();
+  const editability = createReadonlyEditability();
+  const groups: Array<{
+    id: string;
+    label: string;
+    kind: VisualGroup["kind"];
+    path: string;
+  }> = [
+    { id: "group:resources", label: "Resources", kind: "resources", path: "buffers" },
+    { id: "group:bindings", label: "Bindings", kind: "bindings", path: "bindGroups" },
+    { id: "group:programs", label: "Programs", kind: "programs", path: "shaders" },
+    { id: "group:execution", label: "Execution", kind: "execution", path: "passes" },
+    { id: "group:graphs", label: "Render Graphs", kind: "graphs", path: "renderGraphs" },
+  ];
+
+  return groups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    kind: group.kind,
+    sourceRef: createSourceReference(group.id, "schema", group.path),
+    capabilities,
+    editability,
+  }));
+}
+
+function getVisualGroupId(type: VisualNodeKind): string {
+  switch (type) {
+    case "buffer":
+      return "group:resources";
+    case "layout":
+    case "bindGroup":
+      return "group:bindings";
+    case "shader":
+    case "pipeline":
+      return "group:programs";
+    case "pass":
+      return "group:execution";
+    case "renderGraph":
+      return "group:graphs";
+  }
+}
+
+function createNodeBadges(node: EditorNode): VisualBadge[] {
+  const badges: VisualBadge[] = [{ id: `${node.id}:kind`, label: node.type, tone: "neutral" }];
+
+  if (node.type === "buffer") {
+    badges.push({
+      id: `${node.id}:bufferType`,
+      label: String(node.properties.bufferType),
+      tone: "info",
+    });
+  }
+  if (node.type === "pipeline" && typeof node.properties.pipelineType === "string") {
+    badges.push({
+      id: `${node.id}:pipelineType`,
+      label: node.properties.pipelineType,
+      tone: "info",
+    });
+  }
+  if (node.type === "pass" && typeof node.properties.passType === "string") {
+    badges.push({ id: `${node.id}:passType`, label: node.properties.passType, tone: "info" });
+  }
+  if (node.type === "renderGraph" && node.properties.main === true) {
+    badges.push({ id: `${node.id}:main`, label: "main", tone: "success" });
+  }
+
+  return badges;
+}
+
+function createEdgeBadges(edge: EditorEdge, meaning: VisualEdgeMeaning): VisualBadge[] {
+  return [{ id: `${createVisualEdgeId(edge, meaning)}:meaning`, label: meaning, tone: "neutral" }];
+}
+
+function getVisualEdgeMeaning(edge: EditorEdge): VisualEdgeMeaning {
+  if (edge.label === "uses layout") return "uses-layout";
+  if (edge.label.startsWith("binding ")) return "binds-resource";
+  if (edge.label === "layout ref") return "references-layout";
+  if (edge.label === "shader") return "uses-shader";
+  if (edge.label.startsWith("group ") && edge.to.startsWith("layout:"))
+    return "uses-bind-group-layout";
+  if (edge.label === "uses pipeline") return "uses-pipeline";
+  if (edge.label.startsWith("group ") && edge.to.startsWith("bindGroup:")) return "uses-bind-group";
+  if (edge.label === "contains") return "contains-pass";
+  if (edge.label.startsWith("subgraph ")) return "contains-subgraph";
+  if (edge.label.startsWith("depends ")) return "depends-on";
+  return "references";
+}
+
+function createVisualEdgeId(edge: EditorEdge, meaning: VisualEdgeMeaning): string {
+  return `edge:${edge.from}->${edge.to}:${meaning}:${toStableIdPart(edge.label)}`;
+}
+
+function createNodeSourceReference(node: EditorNode): VisualSourceReference {
+  const [, ...nameParts] = node.id.split(":");
+  return createSourceReference(
+    node.id,
+    node.type,
+    getNodeSchemaPath(node.type, nameParts.join(":")),
+  );
+}
+
+function createEdgeSourceReference(
+  edge: EditorEdge,
+  meaning: VisualEdgeMeaning,
+): VisualSourceReference {
+  return createSourceReference(
+    createVisualEdgeId(edge, meaning),
+    "edge",
+    `${edge.from}.${meaning}.${edge.to}`,
+  );
+}
+
+function createSourceReference(
+  id: string,
+  entityType: VisualSourceEntityType,
+  schemaPath: string,
+): VisualSourceReference {
+  return { id, entityType, schemaPath };
+}
+
+function getNodeSchemaPath(type: VisualNodeKind, name: string): string {
+  switch (type) {
+    case "buffer":
+      return `buffers.${name}`;
+    case "layout":
+      return `bindGroupLayouts.${name}`;
+    case "bindGroup":
+      return `bindGroups.${name}`;
+    case "shader":
+      return `shaders.${name}`;
+    case "pipeline":
+      return `pipelines.${name}`;
+    case "pass":
+      return `passes.${name}`;
+    case "renderGraph":
+      return `renderGraphs.${name}`;
+  }
+}
+
+function toStableIdPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function buildGraphData(schema: WebGpuSimulationSchema): GraphData {

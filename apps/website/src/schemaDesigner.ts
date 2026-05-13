@@ -49,12 +49,25 @@ export type SchemaDesignerPreviewResult =
 
 export interface SchemaDesignerOptions {
   onPreviewHandoff?(handoff: SchemaDesignerPreviewHandoff): Promise<SchemaDesignerPreviewResult>;
+  onCanvasStateChange?(state: SchemaDesignerCanvasState): void;
 }
 
 interface PreviewUiState {
   lastAcceptedDraftVersion: number | null;
   status: "synced" | "stale" | "pending" | "blocked" | "success" | "failure";
   message: string;
+}
+
+export interface SchemaDesignerCanvasState {
+  schema: WebGpuSimulationSchema;
+  diagnostics: EditorDraftSession["validation"]["diagnostics"];
+  draftVersion: number;
+  activePreviewDraftVersion: number | null;
+  previewStatus: PreviewUiState["status"];
+  previewMessage: string;
+  previewStale: boolean;
+  dirty: boolean;
+  selectedId: string | null;
 }
 
 export interface PreviewGateInput {
@@ -115,6 +128,7 @@ export function mountSchemaDesigner(
       ? `Applied ${operation.kind}`
       : `Rejected ${operation.kind}: ${result.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`;
     renderDesigner(dom, session, previewState);
+    emitCanvasState();
   };
 
   const requestPreviewHandoff = async (): Promise<void> => {
@@ -126,6 +140,7 @@ export function mountSchemaDesigner(
         .map((diagnostic) => diagnostic.message)
         .join("; ")}`;
       renderDesigner(dom, session, previewState);
+      emitCanvasState();
       return;
     }
 
@@ -133,12 +148,14 @@ export function mountSchemaDesigner(
       previewState.status = "failure";
       previewState.message = "Preview handoff failed: no runtime callback is registered.";
       renderDesigner(dom, session, previewState);
+      emitCanvasState();
       return;
     }
 
     previewState.status = "pending";
     previewState.message = `Sending validated draft v${handoff.metadata.draftVersion} to preview runtime...`;
     renderDesigner(dom, session, previewState);
+    emitCanvasState();
 
     try {
       const result = await options.onPreviewHandoff({
@@ -160,11 +177,32 @@ export function mountSchemaDesigner(
     }
 
     renderDesigner(dom, session, previewState);
+    emitCanvasState();
+  };
+
+  const emitCanvasState = (): void => {
+    const gateState = derivePreviewGateState({
+      draftVersion: session.draftVersion,
+      validationStatus: session.validation.status,
+      previewState,
+    });
+    options.onCanvasStateChange?.({
+      schema: session.draft,
+      diagnostics: session.validation.diagnostics,
+      draftVersion: session.draftVersion,
+      activePreviewDraftVersion: previewState.lastAcceptedDraftVersion,
+      previewStatus: gateState.status,
+      previewMessage: gateState.message,
+      previewStale: gateState.status === "stale",
+      dirty: session.dirty,
+      selectedId: session.selectedId,
+    });
   };
 
   container.replaceChildren(dom.root);
   dom.root.addEventListener("click", onClick);
   renderDesigner(dom, session, previewState);
+  emitCanvasState();
 
   return {
     dispose(): void {
