@@ -9,6 +9,7 @@
 - `packages/schema/docs/SCHEMA_MODEL.md` — 静态数据模型规范
 - `packages/schema/docs/SCHEMA_RUNTIME.md` — 运行时与工具链规范
 - `packages/schema/docs/IMPLEMENTATION_PLAN.md` — 实施顺序与维护建议
+- `apps/website/README.md` — 网站演示入口、PBF demo 与只读 Schema Graph Inspector 边界
 
 推荐阅读顺序：`PROJECT_OVERVIEW.md` → `SCHEMA_MODEL.md` → `SCHEMA_RUNTIME.md` → `IMPLEMENTATION_PLAN.md`
 
