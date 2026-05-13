@@ -93,13 +93,18 @@ function bootstrap(): void {
     return;
   }
 
-  mountSchemaDesigner(designerMount);
+  const previewHandle = Promise.resolve(mountPbfDemo(demoMount));
+
+  mountSchemaDesigner(designerMount, {
+    async onPreviewHandoff(handoff) {
+      const handle = await previewHandle;
+      return handle.acceptPreviewSchema(handoff);
+    },
+  });
   mountSchemaInspector(inspectorMount);
 
   try {
-    const handle = mountPbfDemo(demoMount);
-
-    void Promise.resolve(handle).catch((error: unknown) => {
+    void previewHandle.catch((error: unknown) => {
       showFatalError(app, {
         reason: "Failed to mount the PBF demo.",
         details: toErrorDetails(error),

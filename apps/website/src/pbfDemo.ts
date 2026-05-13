@@ -6,12 +6,26 @@ import {
   PBF_SIMULATION_METADATA,
   type PbfSimulationParams,
 } from "schema/examples/pbf-simulation";
+import { DefaultSchemaValidator, type WebGpuSimulationSchema } from "schema";
 import { SimulationRunner, createDispatchExecutionContext, getRequiredDeviceLimits } from "preview";
 import { ParticleCanvasRenderer } from "./render2d.ts";
 
 export interface PbfDemoHandle {
+  acceptPreviewSchema(handoff: PbfPreviewSchemaHandoff): Promise<PbfPreviewAcceptance>;
   dispose(): void;
 }
+
+export interface PbfPreviewSchemaHandoff {
+  schema: WebGpuSimulationSchema;
+  metadata: {
+    draftVersion: number;
+    dirty: boolean;
+    selectedId: string | null;
+    selectedType: string | null;
+  };
+}
+
+export type PbfPreviewAcceptance = { ok: true; message: string } | { ok: false; message: string };
 
 interface DemoDom {
   root: HTMLDivElement;
@@ -97,6 +111,80 @@ const STATUS_RUN_STOPPED = "Stopped";
 const STATUS_RUN_ERROR = "Error";
 const HELP_TEXT =
   "This demo executes the schema-defined PBF compute graph on WebGPU and renders positions through a CPU readback path into a 2D canvas.";
+const PBF_REQUIRED_BUFFERS = [
+  "positions",
+  "oldPositions",
+  "velocities",
+  "positionDeltas",
+  "gridCounts",
+  "grid2Particles",
+  "neighborCounts",
+  "neighbors",
+  "lambdas",
+  "simParams",
+];
+const PBF_REQUIRED_PASSES = [
+  "pass-prologue",
+  "pass-clear-grid",
+  "pass-build-grid",
+  "pass-pbf-lambda",
+  "pass-pbf-delta",
+  "pass-apply-delta",
+  "pass-epilogue",
+];
+const PBF_MAIN_GRAPH = "main-simulation-graph";
+const PBF_ITERATION_GRAPH = "pbf-iteration-graph";
+const PBF_SHARED_BIND_GROUP = "bg-shared";
+
+function validatePbfRuntimeCompatibility(schema: WebGpuSimulationSchema): PbfPreviewAcceptance {
+  const missingBuffers = PBF_REQUIRED_BUFFERS.filter((name) => !schema.buffers[name]);
+  if (missingBuffers.length > 0) {
+    return {
+      ok: false,
+      message: `Preview handoff rejected: schema is not compatible with the PBF runtime; missing buffers: ${missingBuffers.join(", ")}.`,
+    };
+  }
+
+  const missingPasses = PBF_REQUIRED_PASSES.filter((name) => !schema.passes[name]);
+  if (missingPasses.length > 0) {
+    return {
+      ok: false,
+      message: `Preview handoff rejected: schema is not compatible with the PBF runtime; missing passes: ${missingPasses.join(", ")}.`,
+    };
+  }
+
+  if (schema.mainGraphRef !== PBF_MAIN_GRAPH || !schema.renderGraphs[PBF_MAIN_GRAPH]) {
+    return {
+      ok: false,
+      message:
+        "Preview handoff rejected: schema is not compatible with the PBF runtime; main-simulation-graph must be the main graph.",
+    };
+  }
+
+  if (!schema.renderGraphs[PBF_ITERATION_GRAPH]) {
+    return {
+      ok: false,
+      message:
+        "Preview handoff rejected: schema is not compatible with the PBF runtime; pbf-iteration-graph is missing.",
+    };
+  }
+
+  const passesMissingSharedBindGroup = PBF_REQUIRED_PASSES.filter((name) => {
+    const pass = schema.passes[name];
+    return (
+      pass.type !== "compute" ||
+      !pass.bindGroups.some((binding) => binding.bindGroupRef === PBF_SHARED_BIND_GROUP)
+    );
+  });
+  if (passesMissingSharedBindGroup.length > 0) {
+    return {
+      ok: false,
+      message: `Preview handoff rejected: schema is not compatible with the PBF runtime; passes missing ${PBF_SHARED_BIND_GROUP}: ${passesMissingSharedBindGroup.join(", ")}.`,
+    };
+  }
+
+  return { ok: true, message: "Schema satisfies the PBF runtime compatibility guard." };
+}
 
 function setSliderLabel(input: HTMLInputElement, label: HTMLElement, digits: number): void {
   label.textContent = Number(input.value).toFixed(digits);
@@ -245,6 +333,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
   let rebuildTimer = 0;
   let simulation: SimulationState | null = null;
   let stepPromise: Promise<void> | null = null;
+  let activeSchema: WebGpuSimulationSchema = createPbfSimulationSchema();
 
   const teardownRunner = (state: SimulationState | null): void => {
     state?.runner.dispose();
@@ -330,9 +419,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     renderer.render(initialState.positions);
   };
 
-  const requestDevice = async (
-    schema: ReturnType<typeof createPbfSimulationSchema>,
-  ): Promise<GPUDevice | null> => {
+  const requestDevice = async (schema: WebGpuSimulationSchema): Promise<GPUDevice | null> => {
     if (!("gpu" in navigator)) {
       return null;
     }
@@ -370,8 +457,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     setMessage(HELP_TEXT);
     dom.particleCountValue.textContent = `${PBF_SIMULATION_METADATA.particleCount}`;
 
-    const schema = createPbfSimulationSchema();
-    const device = await requestDevice(schema);
+    const device = await requestDevice(activeSchema);
     if (!device) {
       running = false;
       setSupportState(STATUS_SUPPORT_UNAVAILABLE);
@@ -402,7 +488,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
     const state: SimulationState = {
       device,
       runner: new SimulationRunner({
-        schema,
+        schema: activeSchema,
         device,
         context: createDispatchExecutionContext({
           params: {
@@ -474,7 +560,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       });
   };
 
-  const resetSimulation = async (): Promise<void> => {
+  const resetSimulation = async (nextSchema = activeSchema): Promise<void> => {
     if (!simulation || resetting || disposed) {
       return;
     }
@@ -487,6 +573,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       await stepPromise;
 
       const previous = simulation;
+      activeSchema = nextSchema;
       simulationParams = {
         ...PBF_DEFAULT_SIMULATION_PARAMS,
         ...readSimulationOverrides(dom),
@@ -494,7 +581,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       const next: SimulationState = {
         device: previous.device,
         runner: new SimulationRunner({
-          schema: createPbfSimulationSchema(),
+          schema: activeSchema,
           device: previous.device,
           context: createDispatchExecutionContext({
             params: {
@@ -521,6 +608,40 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
       resetting = false;
       syncControls();
     }
+  };
+
+  const acceptPreviewSchema = async (
+    handoff: PbfPreviewSchemaHandoff,
+  ): Promise<PbfPreviewAcceptance> => {
+    const validation = new DefaultSchemaValidator().validate(handoff.schema);
+    if (!validation.valid) {
+      return {
+        ok: false,
+        message: `Preview handoff rejected by runtime validation: ${validation.errors
+          .map((diagnostic) => diagnostic.message)
+          .join("; ")}`,
+      };
+    }
+
+    const compatibility = validatePbfRuntimeCompatibility(handoff.schema);
+    if (!compatibility.ok) {
+      return compatibility;
+    }
+
+    if (!simulation || resetting || disposed) {
+      return { ok: false, message: "Preview runtime is not ready to accept a schema." };
+    }
+
+    await resetSimulation(handoff.schema);
+
+    if (!simulation) {
+      return { ok: false, message: "Preview runtime failed while applying the accepted schema." };
+    }
+
+    return {
+      ok: true,
+      message: `Preview runtime accepted draft v${handoff.metadata.draftVersion}; runner was recreated from the validated schema.`,
+    };
   };
 
   const onToggleClick = (): void => {
@@ -611,6 +732,7 @@ export async function mountPbfDemo(container: HTMLElement): Promise<PbfDemoHandl
   tick();
 
   return {
+    acceptPreviewSchema,
     dispose(): void {
       if (disposed) {
         return;

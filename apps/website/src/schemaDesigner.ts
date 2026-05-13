@@ -2,12 +2,19 @@ import {
   applyEditorOperation,
   createEditorDraftSession,
   inspectSchema,
+  requestDraftPreviewHandoff,
+  type DraftPreviewHandoffMetadata,
   type EditorDraftSession,
   type EditorOperation,
   type EditorSelectionType,
   type SchemaInspection,
 } from "editor";
-import { BUFFER_USAGE, type ComputePassSchema, type RenderGraphNodeSchema } from "schema";
+import {
+  BUFFER_USAGE,
+  type ComputePassSchema,
+  type RenderGraphNodeSchema,
+  type WebGpuSimulationSchema,
+} from "schema";
 import { createPbfSimulationSchema } from "schema/examples/pbf-simulation";
 
 const SCRATCH_BUFFER = "designerScratchBuffer";
@@ -27,15 +34,55 @@ interface DesignerDom {
   passes: HTMLElement;
   graphNodes: HTMLElement;
   previewGate: HTMLElement;
+  previewButton: HTMLButtonElement;
   lastOperation: HTMLElement;
+}
+
+export interface SchemaDesignerPreviewHandoff {
+  schema: WebGpuSimulationSchema;
+  metadata: DraftPreviewHandoffMetadata;
+}
+
+export type SchemaDesignerPreviewResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
+
+export interface SchemaDesignerOptions {
+  onPreviewHandoff?(handoff: SchemaDesignerPreviewHandoff): Promise<SchemaDesignerPreviewResult>;
+}
+
+interface PreviewUiState {
+  lastAcceptedDraftVersion: number | null;
+  status: "synced" | "stale" | "pending" | "blocked" | "success" | "failure";
+  message: string;
+}
+
+export interface PreviewGateInput {
+  draftVersion: number;
+  validationStatus: EditorDraftSession["validation"]["status"];
+  previewState: PreviewUiState;
+}
+
+export interface PreviewGateState {
+  status: PreviewUiState["status"];
+  message: string;
+  buttonDisabled: boolean;
 }
 
 export interface SchemaDesignerHandle {
   dispose(): void;
 }
 
-export function mountSchemaDesigner(container: HTMLElement): SchemaDesignerHandle {
+export function mountSchemaDesigner(
+  container: HTMLElement,
+  options: SchemaDesignerOptions = {},
+): SchemaDesignerHandle {
   let session = createEditorDraftSession(createPbfSimulationSchema());
+  const previewState: PreviewUiState = {
+    lastAcceptedDraftVersion: session.draftVersion,
+    status: "synced",
+    message: "Preview starts from the same PBF schema. Edits require explicit handoff.",
+  };
   const dom = createDesignerDom();
 
   const onClick = (event: Event): void => {
@@ -44,13 +91,20 @@ export function mountSchemaDesigner(container: HTMLElement): SchemaDesignerHandl
       return;
     }
 
-    const button = target.closest<HTMLButtonElement>("[data-operation]");
-    if (!button) {
+    const previewButton = target.closest<HTMLButtonElement>("[data-action='request-preview']");
+    if (previewButton) {
+      event.preventDefault();
+      void requestPreviewHandoff();
+      return;
+    }
+
+    const operationButton = target.closest<HTMLButtonElement>("[data-operation]");
+    if (!operationButton) {
       return;
     }
 
     event.preventDefault();
-    const operation = createOperation(button.dataset.operation, session);
+    const operation = createOperation(operationButton.dataset.operation, session);
     if (!operation) {
       return;
     }
@@ -60,12 +114,57 @@ export function mountSchemaDesigner(container: HTMLElement): SchemaDesignerHandl
     dom.lastOperation.textContent = result.ok
       ? `Applied ${operation.kind}`
       : `Rejected ${operation.kind}: ${result.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`;
-    renderDesigner(dom, session);
+    renderDesigner(dom, session, previewState);
+  };
+
+  const requestPreviewHandoff = async (): Promise<void> => {
+    const handoff = requestDraftPreviewHandoff(session);
+
+    if (handoff.status === "blocked") {
+      previewState.status = "blocked";
+      previewState.message = `Preview handoff blocked: ${handoff.diagnostics
+        .map((diagnostic) => diagnostic.message)
+        .join("; ")}`;
+      renderDesigner(dom, session, previewState);
+      return;
+    }
+
+    if (!options.onPreviewHandoff) {
+      previewState.status = "failure";
+      previewState.message = "Preview handoff failed: no runtime callback is registered.";
+      renderDesigner(dom, session, previewState);
+      return;
+    }
+
+    previewState.status = "pending";
+    previewState.message = `Sending validated draft v${handoff.metadata.draftVersion} to preview runtime...`;
+    renderDesigner(dom, session, previewState);
+
+    try {
+      const result = await options.onPreviewHandoff({
+        schema: handoff.schema,
+        metadata: handoff.metadata,
+      });
+      if (result.ok) {
+        previewState.lastAcceptedDraftVersion = handoff.metadata.draftVersion;
+        previewState.status = "success";
+        previewState.message = result.message;
+      } else {
+        previewState.status = "failure";
+        previewState.message = result.message;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      previewState.status = "failure";
+      previewState.message = `Preview handoff failed: ${message}`;
+    }
+
+    renderDesigner(dom, session, previewState);
   };
 
   container.replaceChildren(dom.root);
   dom.root.addEventListener("click", onClick);
-  renderDesigner(dom, session);
+  renderDesigner(dom, session, previewState);
 
   return {
     dispose(): void {
@@ -90,6 +189,7 @@ function createDesignerDom(): DesignerDom {
         <div class="inspector-card__eyebrow">Draft State</div>
         <dl class="designer-kv" data-role="summary"></dl>
         <p class="designer-preview-gate" data-role="preview-gate"></p>
+        <button type="button" class="designer-preview-button" data-action="request-preview">Preview current draft</button>
       </article>
 
       <article class="designer-card designer-card--selection">
@@ -187,6 +287,7 @@ function createDesignerDom(): DesignerDom {
     passes: queryRequired(root, '[data-role="passes"]'),
     graphNodes: queryRequired(root, '[data-role="graph-nodes"]'),
     previewGate: queryRequired(root, '[data-role="preview-gate"]'),
+    previewButton: queryRequired(root, '[data-action="request-preview"]') as HTMLButtonElement,
     lastOperation: queryRequired(root, '[data-role="last-operation"]'),
   };
 }
@@ -274,26 +375,35 @@ function createScratchNode(dependencies: string[]): RenderGraphNodeSchema {
   };
 }
 
-function renderDesigner(dom: DesignerDom, session: EditorDraftSession): void {
+function renderDesigner(
+  dom: DesignerDom,
+  session: EditorDraftSession,
+  previewState: PreviewUiState,
+): void {
   const inspection = inspectSchema(session.draft);
-  renderSummary(dom.summary, session, inspection);
+  renderSummary(dom.summary, session, inspection, previewState);
   renderSelection(dom.selection, session);
   renderValidation(dom, session);
+  renderPreviewGate(dom, session, previewState);
   renderEntityList(dom.buffers, inspection, "buffer");
   renderEntityList(dom.passes, inspection, "pass");
   renderGraphNodes(dom.graphNodes, session);
-  updateControlAvailability(dom.root, session);
+  updateControlAvailability(dom.root, session, previewState);
 }
 
 function renderSummary(
   target: HTMLElement,
   session: EditorDraftSession,
   inspection: SchemaInspection,
+  previewState: PreviewUiState,
 ): void {
   const graph = session.draft.renderGraphs[MAIN_GRAPH];
+  const activeVersion = previewState.lastAcceptedDraftVersion;
   target.innerHTML = renderRows([
     ["Schema", session.draft.name],
     ["Dirty", session.dirty ? "yes" : "no"],
+    ["Draft version", String(session.draftVersion)],
+    ["Active preview version", activeVersion === null ? "none" : String(activeVersion)],
     ["Buffers", String(inspection.summary.bufferCount)],
     ["Passes", String(inspection.summary.passCount)],
     ["Graph nodes", String(graph?.nodes.length ?? 0)],
@@ -312,10 +422,6 @@ function renderValidation(dom: DesignerDom, session: EditorDraftSession): void {
   const valid = session.validation.status === "valid";
   dom.validation.textContent = valid ? "Valid draft" : "Invalid draft";
   dom.validation.className = valid ? "is-valid" : "is-invalid";
-  dom.previewGate.textContent = valid
-    ? "Preview handoff: validated draft is available, but the running preview remains on its separate schema for this milestone."
-    : "Preview handoff: blocked because invalid drafts are never passed to preview/runtime.";
-  dom.previewGate.classList.toggle("is-blocked", !valid);
 
   if (session.validation.diagnostics.length === 0) {
     dom.diagnostics.innerHTML = `<li class="designer-diagnostic designer-diagnostic--empty">No diagnostics from the schema validator.</li>`;
@@ -333,6 +439,71 @@ function renderValidation(dom: DesignerDom, session: EditorDraftSession): void {
       `,
     )
     .join("");
+}
+
+function renderPreviewGate(
+  dom: DesignerDom,
+  session: EditorDraftSession,
+  previewState: PreviewUiState,
+): void {
+  const gateState = derivePreviewGateState({
+    draftVersion: session.draftVersion,
+    validationStatus: session.validation.status,
+    previewState,
+  });
+
+  dom.previewGate.textContent = gateState.message;
+  dom.previewGate.dataset.state = gateState.status;
+  dom.previewGate.classList.toggle(
+    "is-blocked",
+    gateState.status === "blocked" || gateState.status === "failure",
+  );
+  dom.previewGate.classList.toggle("is-stale", gateState.status === "stale");
+  dom.previewButton.disabled = gateState.buttonDisabled;
+}
+
+export function derivePreviewGateState(input: PreviewGateInput): PreviewGateState {
+  const { draftVersion, previewState, validationStatus } = input;
+  const invalid = validationStatus !== "valid";
+  const explicitRuntimeStatus =
+    previewState.status === "pending" ||
+    previewState.status === "blocked" ||
+    previewState.status === "failure";
+
+  if (explicitRuntimeStatus) {
+    return {
+      status: previewState.status,
+      message: previewState.message,
+      buttonDisabled: invalid || previewState.status === "pending",
+    };
+  }
+
+  if (invalid) {
+    return {
+      status: "blocked",
+      message:
+        "Preview handoff blocked: invalid drafts are never passed to preview/runtime. See diagnostics.",
+      buttonDisabled: true,
+    };
+  }
+
+  if (
+    previewState.lastAcceptedDraftVersion !== null &&
+    previewState.lastAcceptedDraftVersion !== draftVersion
+  ) {
+    return {
+      status: "stale",
+      message:
+        "Preview is stale: edits were made since the last accepted handoff. Use the button to request a validated handoff.",
+      buttonDisabled: false,
+    };
+  }
+
+  return {
+    status: previewState.status,
+    message: previewState.message,
+    buttonDisabled: false,
+  };
 }
 
 function renderEntityList(
@@ -374,7 +545,11 @@ function renderGraphNodes(target: HTMLElement, session: EditorDraftSession): voi
     .join("");
 }
 
-function updateControlAvailability(root: HTMLElement, session: EditorDraftSession): void {
+function updateControlAvailability(
+  root: HTMLElement,
+  session: EditorDraftSession,
+  previewState: PreviewUiState,
+): void {
   const hasBuffer = Boolean(session.draft.buffers[SCRATCH_BUFFER]);
   const hasPass = Boolean(session.draft.passes[SCRATCH_PASS]);
   const hasNode = Boolean(
@@ -399,6 +574,12 @@ function updateControlAvailability(root: HTMLElement, session: EditorDraftSessio
     if (button) {
       button.disabled = !enabled;
     }
+  }
+
+  const previewButton = root.querySelector<HTMLButtonElement>('[data-action="request-preview"]');
+  if (previewButton) {
+    previewButton.disabled =
+      session.validation.status !== "valid" || previewState.status === "pending";
   }
 }
 

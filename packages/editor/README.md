@@ -16,9 +16,10 @@
 - `createEditorState()`：创建基础编辑器状态
 - `createEditorDraftSession(schema)`：从现有 Schema 创建可编辑草稿会话，不隐式修改输入对象
 - `applyEditorOperation(session, operation)`：通过显式操作更新草稿，并返回新会话或失败诊断
+- `requestDraftPreviewHandoff(session)`：显式请求把当前草稿交给 preview/runtime；只有验证通过的草稿会返回克隆后的 Schema payload
 - `inspectSchema(schema)`：返回结构摘要、Mermaid 文本和图数据
 - `getNodeDetail(schema, nodeId)`：按编辑器节点 ID 返回节点详情
-- `EditorState`、`EditorDraftSession`、`EditorOperation`、`EditorOperationResult`、`EditorNode`、`EditorEdge`、`GraphData`、`SchemaInspection` 等类型
+- `EditorState`、`EditorDraftSession`、`EditorOperation`、`EditorOperationResult`、`DraftPreviewHandoffResult`、`EditorNode`、`EditorEdge`、`GraphData`、`SchemaInspection` 等类型
 
 ## Inspector 契约
 
@@ -39,6 +40,7 @@
 草稿会话包含：
 
 - `draft`：当前可编辑 Schema 草稿
+- `draftVersion`：确定性的草稿版本号，初始为 `0`，每次成功的 mutating operation 递增；selection 不递增
 - `selectedId` / `selectedType`：UI 当前选中的实体标识与类型
 - `dirty`：草稿是否已被编辑操作修改
 - `validation.status` / `validation.diagnostics`：当前草稿验证状态与诊断
@@ -51,6 +53,17 @@
 - Selection：`selectEntity`
 
 `applyEditorOperation()` 对支持的操作返回新的 `EditorDraftSession`。不支持的操作、重复创建、缺失目标或歧义重命名会失败并返回 `EDITOR_OPERATION` 诊断，且不会修改传入的旧会话。编辑后的草稿可能处于 `invalid` 状态，调用方应读取 `validation.diagnostics`，preview/runtime 只能消费通过验证的草稿。
+
+## Designer Preview Handoff
+
+Preview handoff 是显式边界：编辑器不会在每次编辑后自动触发运行时，也不会拥有 `GPUDevice`、command encoder、`SimulationRunner` 或 preview loop。设计器 UI 必须在用户请求预览时调用 `requestDraftPreviewHandoff(session)`。
+
+返回结果分为：
+
+- `status: "accepted"`：仅当 `session.validation.status === "valid"` 且克隆后的草稿再次通过 `DefaultSchemaValidator` 时返回；结果包含独立克隆的 `schema`，以及 `draftVersion`、`dirty`、`selectedId`、`selectedType` 元数据，供 UI 判断当前 preview 是否对应最新草稿
+- `status: "blocked"`：无 Schema payload；返回验证诊断，preview/runtime 不应消费或执行该草稿
+
+该 API 只传递已验证的声明式 Schema 和 UI 元数据，不引入 GPU/runtime 依赖。preview/runtime 仍负责接收 accepted payload 后创建、重置或销毁运行时资源。
 
 图数据当前覆盖以下 Schema 节点类型：
 

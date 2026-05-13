@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyEditorOperation, createEditorDraftSession, type EditorOperation } from "editor";
+import {
+  applyEditorOperation,
+  createEditorDraftSession,
+  requestDraftPreviewHandoff,
+  type EditorOperation,
+} from "editor";
 import {
   createBindGroupLayoutSchema,
   createBindingSchema,
@@ -77,6 +82,7 @@ describe("editor draft edit contract", () => {
     expect(schema.buffers.positions.size).toBe(1200);
     expect(result.session.draft).not.toBe(schema);
     expect(result.session.dirty).toBe(true);
+    expect(result.session.draftVersion).toBe(1);
     expect(result.session.validation.status).toBe("valid");
   });
 
@@ -93,6 +99,7 @@ describe("editor draft edit contract", () => {
     expect(result.session).toMatchObject({
       selectedId: "buffer:positions",
       selectedType: "buffer",
+      draftVersion: 0,
       dirty: false,
       validation: { status: "valid", diagnostics: [] },
     });
@@ -211,5 +218,75 @@ describe("editor draft edit contract", () => {
       expect.arrayContaining([expect.objectContaining({ rule: "MISSING_REF" })]),
     );
     expect(result.diagnostics).toEqual(result.session.validation.diagnostics);
+  });
+
+  it("accepts valid draft preview handoff with cloned schema payload", () => {
+    const session = createEditorDraftSession(buildMinimalSchema());
+
+    const handoff = requestDraftPreviewHandoff(session);
+
+    expect(handoff.status).toBe("accepted");
+    if (handoff.status !== "accepted") return;
+    expect(handoff.schema).toEqual(session.draft);
+    expect(handoff.schema).not.toBe(session.draft);
+    expect(handoff.metadata).toEqual({
+      draftVersion: 0,
+      dirty: false,
+      selectedId: null,
+      selectedType: null,
+    });
+    expect(handoff.diagnostics).toEqual([]);
+
+    handoff.schema.buffers.positions.size = 999;
+    expect(session.draft.buffers.positions.size).toBe(1200);
+  });
+
+  it("blocks invalid draft preview handoff with diagnostics and no schema payload", () => {
+    const session = createEditorDraftSession(buildMinimalSchema());
+    const result = applyEditorOperation(session, {
+      kind: "updatePass",
+      name: "sim-pass",
+      patch: { pipelineRef: "missing-pipeline" },
+    });
+
+    const handoff = requestDraftPreviewHandoff(result.session);
+
+    expect(handoff.status).toBe("blocked");
+    expect("schema" in handoff).toBe(false);
+    expect(handoff.metadata).toMatchObject({ draftVersion: 1, dirty: true });
+    expect(handoff.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ rule: "MISSING_REF" })]),
+    );
+  });
+
+  it("exposes incrementing version and dirty metadata after edits", () => {
+    let session = createEditorDraftSession(buildMinimalSchema());
+
+    const selection = applyEditorOperation(session, {
+      kind: "selectEntity",
+      id: "buffer:positions",
+      entityType: "buffer",
+    });
+    expect(selection.ok).toBe(true);
+    expect(selection.session.draftVersion).toBe(0);
+    expect(selection.session.dirty).toBe(false);
+    session = selection.session;
+
+    const edit = applyEditorOperation(session, {
+      kind: "updateBuffer",
+      name: "positions",
+      patch: { size: 2400 },
+    });
+    expect(edit.ok).toBe(true);
+
+    const handoff = requestDraftPreviewHandoff(edit.session);
+
+    expect(handoff.status).toBe("accepted");
+    expect(handoff.metadata).toMatchObject({
+      draftVersion: 1,
+      dirty: true,
+      selectedId: "buffer:positions",
+      selectedType: "buffer",
+    });
   });
 });

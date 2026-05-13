@@ -49,11 +49,34 @@ export interface EditorValidationState {
 
 export interface EditorDraftSession {
   draft: WebGpuSimulationSchema;
+  draftVersion: number;
   selectedId: string | null;
   selectedType: EditorSelectionType;
   dirty: boolean;
   validation: EditorValidationState;
 }
+
+export interface DraftPreviewHandoffMetadata {
+  draftVersion: number;
+  dirty: boolean;
+  selectedId: string | null;
+  selectedType: EditorSelectionType;
+}
+
+export interface AcceptedDraftPreviewHandoff {
+  status: "accepted";
+  schema: WebGpuSimulationSchema;
+  metadata: DraftPreviewHandoffMetadata;
+  diagnostics: [];
+}
+
+export interface BlockedDraftPreviewHandoff {
+  status: "blocked";
+  metadata: DraftPreviewHandoffMetadata;
+  diagnostics: ValidationError[];
+}
+
+export type DraftPreviewHandoffResult = AcceptedDraftPreviewHandoff | BlockedDraftPreviewHandoff;
 
 export type EditorOperation =
   | { kind: "selectEntity"; id: string | null; entityType: EditorSelectionType }
@@ -81,7 +104,7 @@ export function createEditorState(): EditorState {
 }
 
 export function createEditorDraftSession(schema: WebGpuSimulationSchema): EditorDraftSession {
-  return createSession(cloneSchema(schema), null, null, false);
+  return createSession(cloneSchema(schema), null, null, false, 0);
 }
 
 export function applyEditorOperation(
@@ -91,7 +114,13 @@ export function applyEditorOperation(
   if (operation.kind === "selectEntity") {
     return {
       ok: true,
-      session: createSession(session.draft, operation.id, operation.entityType, session.dirty),
+      session: createSession(
+        session.draft,
+        operation.id,
+        operation.entityType,
+        session.dirty,
+        session.draftVersion,
+      ),
       diagnostics: [],
     };
   }
@@ -241,12 +270,48 @@ export function applyEditorOperation(
     }
   }
 
-  const nextSession = createSession(draft, session.selectedId, session.selectedType, true);
+  const nextSession = createSession(
+    draft,
+    session.selectedId,
+    session.selectedType,
+    true,
+    session.draftVersion + 1,
+  );
 
   return {
     ok: true,
     session: nextSession,
     diagnostics: nextSession.validation.diagnostics,
+  };
+}
+
+export function requestDraftPreviewHandoff(session: EditorDraftSession): DraftPreviewHandoffResult {
+  const metadata = createHandoffMetadata(session);
+
+  if (session.validation.status !== "valid") {
+    return {
+      status: "blocked",
+      metadata,
+      diagnostics: session.validation.diagnostics,
+    };
+  }
+
+  const schema = cloneSchema(session.draft);
+  const validationResult = new DefaultSchemaValidator().validate(schema);
+
+  if (!validationResult.valid) {
+    return {
+      status: "blocked",
+      metadata,
+      diagnostics: validationResult.errors,
+    };
+  }
+
+  return {
+    status: "accepted",
+    schema,
+    metadata,
+    diagnostics: [],
   };
 }
 
@@ -573,11 +638,13 @@ function createSession(
   selectedId: string | null,
   selectedType: EditorSelectionType,
   dirty: boolean,
+  draftVersion: number,
 ): EditorDraftSession {
   const validationResult = new DefaultSchemaValidator().validate(draft);
 
   return {
     draft,
+    draftVersion,
     selectedId,
     selectedType,
     dirty,
@@ -585,6 +652,15 @@ function createSession(
       status: validationResult.valid ? "valid" : "invalid",
       diagnostics: validationResult.errors,
     },
+  };
+}
+
+function createHandoffMetadata(session: EditorDraftSession): DraftPreviewHandoffMetadata {
+  return {
+    draftVersion: session.draftVersion,
+    dirty: session.dirty,
+    selectedId: session.selectedId,
+    selectedType: session.selectedType,
   };
 }
 
