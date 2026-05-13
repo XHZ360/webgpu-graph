@@ -1,6 +1,7 @@
 import "./styles.css";
 
 import { mountPbfDemo } from "./pbfDemo.ts";
+import { mountSchemaDesigner } from "./schemaDesigner.ts";
 import { mountSchemaInspector } from "./schemaInspector.ts";
 
 type FatalContext = {
@@ -10,6 +11,7 @@ type FatalContext = {
 
 const APP_SHELL = `
   <div data-mount="pbf-demo"></div>
+  <div data-mount="schema-designer"></div>
   <div data-mount="schema-inspector"></div>
 `;
 
@@ -79,16 +81,19 @@ function bootstrap(): void {
 
   app.innerHTML = APP_SHELL;
   const demoMount = app.querySelector<HTMLElement>('[data-mount="pbf-demo"]');
+  const designerMount = app.querySelector<HTMLElement>('[data-mount="schema-designer"]');
   const inspectorMount = app.querySelector<HTMLElement>('[data-mount="schema-inspector"]');
 
-  if (!demoMount || !inspectorMount) {
+  if (!demoMount || !designerMount || !inspectorMount) {
     showFatalError(app, {
       reason: "Missing application mount point.",
-      details: "Expected demo and schema inspector mount elements before initialization.",
+      details:
+        "Expected demo, schema designer, and schema inspector mount elements before initialization.",
     });
     return;
   }
 
+  mountSchemaDesigner(designerMount);
   mountSchemaInspector(inspectorMount);
 
   try {

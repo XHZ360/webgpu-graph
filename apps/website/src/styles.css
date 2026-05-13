@@ -546,6 +546,179 @@ pre {
   font-size: 0.85rem;
 }
 
+.designer-hero {
+  margin-bottom: var(--space-6);
+}
+
+.designer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.designer-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px);
+  padding: var(--space-5);
+}
+
+.designer-card--controls,
+.designer-card--validation {
+  grid-column: span 2;
+}
+
+.designer-kv {
+  margin: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.designer-kv > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.designer-kv dt {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.designer-kv dd {
+  margin: 0;
+  color: var(--color-text-strong);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.designer-preview-gate,
+.designer-last-operation {
+  margin: var(--space-4) 0 0;
+  border-radius: var(--radius-panel);
+  background: var(--color-panel-soft);
+  padding: var(--space-3);
+  color: var(--color-text-soft);
+}
+
+.designer-preview-gate.is-blocked,
+.is-invalid {
+  color: #fca5a5;
+}
+
+.is-valid {
+  color: #86efac;
+}
+
+.designer-diagnostics {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.designer-diagnostic {
+  display: grid;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-panel-soft);
+  padding: var(--space-3);
+}
+
+.designer-diagnostic strong {
+  color: var(--color-warm);
+}
+
+.designer-diagnostic--empty {
+  color: var(--color-text-muted);
+}
+
+.designer-control-groups,
+.designer-entity-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.designer-control-group {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-panel-soft);
+  padding: var(--space-3);
+}
+
+.designer-control-group h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.designer-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.designer-button-row button,
+.designer-entity {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-panel-soft);
+  color: inherit;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.designer-button-row button:hover:not(:disabled),
+.designer-entity:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-strong);
+}
+
+.designer-button-row button:focus-visible,
+.designer-entity:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.designer-button-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.designer-entity {
+  width: 100%;
+  display: grid;
+  gap: var(--space-1);
+  text-align: left;
+}
+
+.designer-entity span {
+  color: var(--color-text-strong);
+  font-weight: 700;
+}
+
+.designer-entity code,
+.designer-diagnostic code,
+.designer-kv code {
+  color: var(--color-accent);
+  font-size: 0.78rem;
+}
+
 .inspector-edge-list strong {
   border-radius: var(--radius-pill);
   background: var(--color-panel);
@@ -557,8 +730,14 @@ pre {
 }
 
 @media (max-width: 1080px) {
+  .designer-grid,
   .inspector-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .designer-card--controls,
+  .designer-card--validation {
+    grid-column: 1 / -1;
   }
 
   .inspector-card--detail {
@@ -567,9 +746,19 @@ pre {
 }
 
 @media (max-width: 760px) {
+  .designer-grid,
   .inspector-grid,
   .inspector-edge-list {
     grid-template-columns: 1fr;
+  }
+
+  .designer-kv > div,
+  .designer-button-row {
+    display: grid;
+  }
+
+  .designer-kv dd {
+    text-align: left;
   }
 
   .inspector-edge-list li {

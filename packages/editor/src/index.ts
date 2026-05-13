@@ -1,4 +1,11 @@
-import type { RenderGraphNodeSchema, WebGpuSimulationSchema } from "schema";
+import {
+  DefaultSchemaValidator,
+  type BufferBindingSchema,
+  type PassSchema,
+  type RenderGraphNodeSchema,
+  type ValidationError,
+  type WebGpuSimulationSchema,
+} from "schema";
 import {
   generateMermaidFromSchema,
   generateStructuralSummary,
@@ -33,8 +40,214 @@ export interface SchemaInspection {
   graph: GraphData;
 }
 
+export type EditorSelectionType = "buffer" | "pass" | "renderGraphNode" | null;
+
+export interface EditorValidationState {
+  status: "valid" | "invalid";
+  diagnostics: ValidationError[];
+}
+
+export interface EditorDraftSession {
+  draft: WebGpuSimulationSchema;
+  selectedId: string | null;
+  selectedType: EditorSelectionType;
+  dirty: boolean;
+  validation: EditorValidationState;
+}
+
+export type EditorOperation =
+  | { kind: "selectEntity"; id: string | null; entityType: EditorSelectionType }
+  | { kind: "createBuffer"; name: string; buffer: BufferBindingSchema }
+  | { kind: "updateBuffer"; name: string; patch: Partial<BufferBindingSchema> }
+  | { kind: "deleteBuffer"; name: string }
+  | { kind: "createPass"; name: string; pass: PassSchema }
+  | { kind: "updatePass"; name: string; patch: Partial<PassSchema> }
+  | { kind: "deletePass"; name: string }
+  | { kind: "addRenderGraphNode"; graphName: string; node: RenderGraphNodeSchema }
+  | {
+      kind: "updateRenderGraphNode";
+      graphName: string;
+      nodeName: string;
+      patch: Partial<RenderGraphNodeSchema>;
+    }
+  | { kind: "removeRenderGraphNode"; graphName: string; nodeName: string };
+
+export type EditorOperationResult =
+  | { ok: true; session: EditorDraftSession; diagnostics: ValidationError[] }
+  | { ok: false; session: EditorDraftSession; diagnostics: ValidationError[] };
+
 export function createEditorState(): EditorState {
   return { selectedId: null };
+}
+
+export function createEditorDraftSession(schema: WebGpuSimulationSchema): EditorDraftSession {
+  return createSession(cloneSchema(schema), null, null, false);
+}
+
+export function applyEditorOperation(
+  session: EditorDraftSession,
+  operation: EditorOperation,
+): EditorOperationResult {
+  if (operation.kind === "selectEntity") {
+    return {
+      ok: true,
+      session: createSession(session.draft, operation.id, operation.entityType, session.dirty),
+      diagnostics: [],
+    };
+  }
+
+  const draft = cloneSchema(session.draft);
+  const failure = (message: string, path?: string): EditorOperationResult => ({
+    ok: false,
+    session,
+    diagnostics: [{ rule: "EDITOR_OPERATION", message, path }],
+  });
+
+  switch (operation.kind) {
+    case "createBuffer": {
+      if (draft.buffers[operation.name]) {
+        return failure(`Buffer '${operation.name}' already exists`, `buffers.${operation.name}`);
+      }
+      if (operation.buffer.name !== operation.name) {
+        return failure("Buffer name must match its map key", `buffers.${operation.name}.name`);
+      }
+      draft.buffers[operation.name] = cloneValue(operation.buffer);
+      break;
+    }
+    case "updateBuffer": {
+      const buffer = draft.buffers[operation.name];
+      if (!buffer) {
+        return failure(`Buffer '${operation.name}' does not exist`, `buffers.${operation.name}`);
+      }
+      if (operation.patch.name !== undefined && operation.patch.name !== operation.name) {
+        return failure("Buffer update cannot rename the map key", `buffers.${operation.name}.name`);
+      }
+      draft.buffers[operation.name] = {
+        ...buffer,
+        ...cloneValue(operation.patch),
+        name: operation.name,
+      };
+      break;
+    }
+    case "deleteBuffer": {
+      if (!draft.buffers[operation.name]) {
+        return failure(`Buffer '${operation.name}' does not exist`, `buffers.${operation.name}`);
+      }
+      delete draft.buffers[operation.name];
+      break;
+    }
+    case "createPass": {
+      if (draft.passes[operation.name]) {
+        return failure(`Pass '${operation.name}' already exists`, `passes.${operation.name}`);
+      }
+      if (operation.pass.name !== operation.name) {
+        return failure("Pass name must match its map key", `passes.${operation.name}.name`);
+      }
+      draft.passes[operation.name] = cloneValue(operation.pass);
+      break;
+    }
+    case "updatePass": {
+      const pass = draft.passes[operation.name];
+      if (!pass) {
+        return failure(`Pass '${operation.name}' does not exist`, `passes.${operation.name}`);
+      }
+      if (operation.patch.name !== undefined && operation.patch.name !== operation.name) {
+        return failure("Pass update cannot rename the map key", `passes.${operation.name}.name`);
+      }
+      const nextPass = {
+        ...pass,
+        ...cloneValue(operation.patch),
+        name: operation.name,
+      } as PassSchema;
+      draft.passes[operation.name] = nextPass;
+      break;
+    }
+    case "deletePass": {
+      if (!draft.passes[operation.name]) {
+        return failure(`Pass '${operation.name}' does not exist`, `passes.${operation.name}`);
+      }
+      delete draft.passes[operation.name];
+      break;
+    }
+    case "addRenderGraphNode": {
+      const graph = draft.renderGraphs[operation.graphName];
+      if (!graph) {
+        return failure(
+          `Render graph '${operation.graphName}' does not exist`,
+          `renderGraphs.${operation.graphName}`,
+        );
+      }
+      if (graph.nodes.some((node) => node.name === operation.node.name)) {
+        return failure(
+          `Render graph node '${operation.node.name}' already exists`,
+          `renderGraphs.${operation.graphName}.nodes.${operation.node.name}`,
+        );
+      }
+      graph.nodes = [...graph.nodes, cloneValue(operation.node)];
+      break;
+    }
+    case "updateRenderGraphNode": {
+      const graph = draft.renderGraphs[operation.graphName];
+      if (!graph) {
+        return failure(
+          `Render graph '${operation.graphName}' does not exist`,
+          `renderGraphs.${operation.graphName}`,
+        );
+      }
+      const index = graph.nodes.findIndex((node) => node.name === operation.nodeName);
+      if (index === -1) {
+        return failure(
+          `Render graph node '${operation.nodeName}' does not exist`,
+          `renderGraphs.${operation.graphName}.nodes.${operation.nodeName}`,
+        );
+      }
+      if (operation.patch.name !== undefined && operation.patch.name !== operation.nodeName) {
+        return failure(
+          "Render graph node update cannot rename the node",
+          `renderGraphs.${operation.graphName}.nodes.${operation.nodeName}.name`,
+        );
+      }
+      graph.nodes = graph.nodes.map((node, nodeIndex) =>
+        nodeIndex === index
+          ? ({
+              ...node,
+              ...cloneValue(operation.patch),
+              name: operation.nodeName,
+            } as RenderGraphNodeSchema)
+          : node,
+      );
+      break;
+    }
+    case "removeRenderGraphNode": {
+      const graph = draft.renderGraphs[operation.graphName];
+      if (!graph) {
+        return failure(
+          `Render graph '${operation.graphName}' does not exist`,
+          `renderGraphs.${operation.graphName}`,
+        );
+      }
+      if (!graph.nodes.some((node) => node.name === operation.nodeName)) {
+        return failure(
+          `Render graph node '${operation.nodeName}' does not exist`,
+          `renderGraphs.${operation.graphName}.nodes.${operation.nodeName}`,
+        );
+      }
+      graph.nodes = graph.nodes.filter((node) => node.name !== operation.nodeName);
+      break;
+    }
+    default: {
+      const unsupported = operation as { kind?: string };
+      return failure(`Unsupported editor operation '${unsupported.kind ?? "unknown"}'`);
+    }
+  }
+
+  const nextSession = createSession(draft, session.selectedId, session.selectedType, true);
+
+  return {
+    ok: true,
+    session: nextSession,
+    diagnostics: nextSession.validation.diagnostics,
+  };
 }
 
 export function inspectSchema(schema: WebGpuSimulationSchema): SchemaInspection {
@@ -353,4 +566,36 @@ export function getNodeDetail(schema: WebGpuSimulationSchema, nodeId: string): E
     default:
       return null;
   }
+}
+
+function createSession(
+  draft: WebGpuSimulationSchema,
+  selectedId: string | null,
+  selectedType: EditorSelectionType,
+  dirty: boolean,
+): EditorDraftSession {
+  const validationResult = new DefaultSchemaValidator().validate(draft);
+
+  return {
+    draft,
+    selectedId,
+    selectedType,
+    dirty,
+    validation: {
+      status: validationResult.valid ? "valid" : "invalid",
+      diagnostics: validationResult.errors,
+    },
+  };
+}
+
+function cloneSchema(schema: WebGpuSimulationSchema): WebGpuSimulationSchema {
+  return cloneValue(schema);
+}
+
+function cloneValue<T>(value: T): T {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(value);
+  }
+
+  return JSON.parse(JSON.stringify(value)) as T;
 }

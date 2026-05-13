@@ -17,6 +17,6 @@
 
 ## 4. Validation
 
-- [ ] 4.1 Run targeted editor and website checks/tests for the new inspector path
-- [ ] 4.2 Run `openspec validate add-schema-graph-inspector --strict`
-- [ ] 4.3 Run the broad repository check if the local `vite-plus` dependency resolution is available
+- [x] 4.1 Run targeted editor and website checks/tests for the new inspector path
+- [x] 4.2 Run `openspec validate add-schema-graph-inspector --strict`
+- [x] 4.3 Run the broad repository check if the local `vite-plus` dependency resolution is available
