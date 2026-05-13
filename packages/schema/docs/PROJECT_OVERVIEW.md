@@ -73,22 +73,18 @@ webgpu-graph/
 
 ## 当前仓库状态
 
-仓库已建立 monorepo 基础结构，文档规格具备骨架，但代码实现仍处于极早期。
+仓库已建立 monorepo 基础结构，`schema` / `preview` / `editor` 三个包都已有可测试实现，当前重点是让已落地能力持续对齐规格文档，并在此基础上扩展运行时与编辑体验。
 
-`packages/schema/src/index.ts` 当前仅导出最小占位类型：
+`packages/schema/src/index.ts` 当前导出核心 Schema 模型、Builder、Validator、Factory 与示例所需的基础工具。已落地的公开面包括：
 
-```typescript
-export type NodeSchema = {
-  id: string;
-  label: string;
-};
+- Buffer / Binding / Shader / Pipeline / Pass / RenderGraph / Simulation 类型
+- `DefaultSchemaBuilder`
+- `DefaultSchemaValidator`
+- `DefaultSchemaFactory`
+- `schema/examples/pbf-simulation`
+- `schema/visualization`
 
-export function createNodeSchema(id: string, label: string): NodeSchema {
-  return { id, label };
-}
-```
-
-文档中涉及的 Buffer、BindGroup、Pipeline、Pass、RenderGraph、Builder、Validator、Factory 等内容属于**目标规格**，并非已落地的公开 API。约定：`SCHEMA_MODEL.md` 与 `SCHEMA_RUNTIME.md` 定义目标设计，代码实现代表已实现状态。
+文档中涉及的更完整运行时能力、编辑体验和扩展资源类型仍属于**目标规格**；已经从代码入口导出的内容代表当前已实现状态。约定：`SCHEMA_MODEL.md` 与 `SCHEMA_RUNTIME.md` 定义目标设计，代码实现代表已实现状态。
 
 ## 开发与运行
 

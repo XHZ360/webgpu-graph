@@ -19,27 +19,29 @@
 - 仓库结构已建立
 - 目标架构已经明确
 - 文档规格已具备骨架
-- 代码实现仍处于极早期
+- `schema` 已具备核心类型、Builder、Validator、Factory、可视化摘要与 PBF 示例
+- `preview` 已具备 Compute 优先的资源创建、RenderGraph 执行、dispatch 表达式解析与基础 device limits 推导
+- `editor` 已具备基于 Schema 的 inspection / graph data 转换能力，完整图形化编辑体验仍待扩展
 
-当前工作重点不是继续扩写概念文档，而是让 `packages/schema` 从最小可运行实现开始，逐步对齐规格文档。
+当前工作重点不是继续扩写概念文档，而是让已落地实现持续对齐规格文档，并围绕真实示例逐步补齐运行时能力与编辑器能力。
 
 ## 当前迁移补充：Route A（运行时 device limits 协商）
 
-在保持当前 Compute 优先闭环不扩散范围的前提下，运行时 capability negotiation 采用以下迁移策略：
+在保持当前 Compute 优先闭环不扩散范围的前提下，运行时 capability negotiation 已先按以下策略落地第一阶段：
 
 1. `schema` 继续作为事实源，提供足以静态推导运行时 limits 的结构
-2. `preview` 新增从 Schema 推导 `requiredLimits` 的能力
-3. host（如 `website`）继续保留 `GPUAdapter` / `GPUDevice` 请求职责，但不再硬编码某个示例所需的具体 limit
+2. `preview` 从 Schema 推导 `requiredLimits`
+3. host（如 `website`）继续保留 `GPUAdapter` / `GPUDevice` 请求职责，通过 `preview` 的推导结果请求 device
 4. 第一阶段只覆盖可静态推导且已出现真实需求的 `maxStorageBuffersPerShaderStage`
 
-这样做的目的不是把 device 生命周期整体迁入 `preview`，而是先把“schema-specific limit knowledge”从 demo 代码上提为 preview 的正式运行时能力。
+这样做的目的不是把 device 生命周期整体迁入 `preview`，而是先把“schema-specific limit knowledge”从 demo 代码上提为 preview 的正式运行时能力。当前已覆盖 PBF 示例所需的 `maxStorageBuffersPerShaderStage`，后续 limit 类型应在出现真实需求时继续补充。
 
-### 该阶段完成标志
+### 第一阶段完成状态
 
 - `preview` 能根据给定 Schema 返回最小 `requiredLimits`
 - `website` 使用 `preview` 的推导结果请求 device，而不是写死示例常量
 - PBF demo 在支持该 limit 的设备上可继续运行
-- 浏览器中不再出现此前由未协商 limit 导致的 WebGPU warning
+- `packages/preview/src/test/deviceLimits.test.ts` 覆盖了 PBF schema 的 `maxStorageBuffersPerShaderStage` 推导
 
 ## 维护建议
 
