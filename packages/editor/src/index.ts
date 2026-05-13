@@ -1,4 +1,4 @@
-import type { WebGpuSimulationSchema } from "schema";
+import type { RenderGraphNodeSchema, WebGpuSimulationSchema } from "schema";
 import {
   generateMermaidFromSchema,
   generateStructuralSummary,
@@ -174,27 +174,48 @@ function buildGraphData(schema: WebGpuSimulationSchema): GraphData {
     }
   }
 
-  const mainGraph = schema.renderGraphs[schema.mainGraphRef];
-  if (mainGraph) {
+  for (const [graphName, graph] of Object.entries(schema.renderGraphs)) {
     nodes.push({
-      id: `renderGraph:${schema.mainGraphRef}`,
+      id: `renderGraph:${graphName}`,
       type: "renderGraph",
-      label: schema.mainGraphRef,
+      label: graphName,
       properties: {
-        nodeCount: mainGraph.nodes.length,
+        nodeCount: graph.nodes.length,
+        main: graphName === schema.mainGraphRef,
       },
     });
 
-    for (const node of mainGraph.nodes) {
+    for (const node of graph.nodes) {
       edges.push({
-        from: `renderGraph:${schema.mainGraphRef}`,
-        to: `pass:${node.passRef}`,
-        label: "contains",
+        from: `renderGraph:${graphName}`,
+        to: getRenderGraphNodeTargetId(node),
+        label: node.kind === "subgraph" ? `subgraph ${node.name}` : "contains",
       });
+
+      for (const dependency of node.dependencies ?? []) {
+        const dependencyNode = graph.nodes.find((candidate) => candidate.name === dependency);
+        if (!dependencyNode) {
+          continue;
+        }
+
+        edges.push({
+          from: getRenderGraphNodeTargetId(dependencyNode),
+          to: getRenderGraphNodeTargetId(node),
+          label: `depends ${dependency}`,
+        });
+      }
     }
   }
 
   return { nodes, edges };
+}
+
+function getRenderGraphNodeTargetId(node: RenderGraphNodeSchema): string {
+  if (node.kind === "subgraph") {
+    return `renderGraph:${node.graphRef}`;
+  }
+
+  return `pass:${node.passRef}`;
 }
 
 export function getNodeDetail(schema: WebGpuSimulationSchema, nodeId: string): EditorNode | null {
@@ -310,11 +331,22 @@ export function getNodeDetail(schema: WebGpuSimulationSchema, nodeId: string): E
         type: "renderGraph",
         label: name,
         properties: {
-          nodes: g.nodes.map((n) => ({
-            name: n.name,
-            passRef: n.passRef,
-            dependencies: n.dependencies ?? [],
-          })),
+          nodes: g.nodes.map((n) =>
+            n.kind === "subgraph"
+              ? {
+                  name: n.name,
+                  kind: n.kind,
+                  graphRef: n.graphRef,
+                  iterations: n.iterations,
+                  dependencies: n.dependencies ?? [],
+                }
+              : {
+                  name: n.name,
+                  kind: n.kind ?? "pass",
+                  passRef: n.passRef,
+                  dependencies: n.dependencies ?? [],
+                },
+          ),
         },
       };
     }

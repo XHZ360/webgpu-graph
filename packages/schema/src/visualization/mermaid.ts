@@ -6,7 +6,7 @@ export function generateMermaidGraph(graph: RenderGraphSchema): string {
 
   for (const node of graph.nodes) {
     const nodeId = sanitizeId(node.name);
-    const label = node.passRef;
+    const label = node.kind === "subgraph" ? node.graphRef : node.passRef;
 
     lines.push(`  ${nodeId}["${label}"]`);
 
