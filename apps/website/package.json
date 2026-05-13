@@ -9,6 +9,7 @@
     "preview": "vp preview"
   },
   "dependencies": {
+    "editor": "workspace:*",
     "preview": "workspace:*",
     "schema": "workspace:*"
   },
