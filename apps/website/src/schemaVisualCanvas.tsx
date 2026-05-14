@@ -10,7 +10,7 @@ import {
   ReactFlowProvider,
   type NodeProps,
 } from "@xyflow/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createVisualProjection, type VisualProjection } from "editor";
 import { createPbfSimulationSchema } from "schema/examples/pbf-simulation";
@@ -70,6 +70,8 @@ export function mountSchemaVisualCanvas(container: HTMLElement): SchemaVisualCan
 }
 
 function SchemaVisualCanvas({ state }: { state: SchemaVisualCanvasState }) {
+  const stageRef = useRef<HTMLElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [selection, setSelection] = useState<CanvasSelection>(null);
   const [enabledMeanings, setEnabledMeanings] = useState(() => new Set(STRUCTURAL_EDGE_MEANINGS));
   const projection = createVisualProjection(state.schema, {
@@ -96,6 +98,32 @@ function SchemaVisualCanvas({ state }: { state: SchemaVisualCanvasState }) {
     });
   };
 
+  useEffect(() => {
+    const onFullscreenChange = (): void => {
+      setIsFullscreen(document.fullscreenElement === stageRef.current);
+    };
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = (): void => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+
+    if (document.fullscreenElement === stage) {
+      void document.exitFullscreen();
+      return;
+    }
+
+    void stage.requestFullscreen().catch(() => setIsFullscreen(false));
+  };
+
   return (
     <section className="visual-canvas page" aria-labelledby="visual-canvas-title">
       <section className="visual-canvas__hero">
@@ -110,7 +138,19 @@ function SchemaVisualCanvas({ state }: { state: SchemaVisualCanvasState }) {
       </section>
 
       <section className="visual-canvas__layout">
-        <article className="visual-canvas__stage" aria-label="Read-only schema visual graph">
+        <article
+          ref={stageRef}
+          className={`visual-canvas__stage${isFullscreen ? " visual-canvas__stage--fullscreen" : ""}`}
+          aria-label="Read-only schema visual graph"
+        >
+          <button
+            type="button"
+            className="visual-canvas__fullscreen-button"
+            aria-pressed={isFullscreen}
+            onClick={toggleFullscreen}
+          >
+            {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          </button>
           <ReactFlow
             nodes={nodes}
             edges={edges}
