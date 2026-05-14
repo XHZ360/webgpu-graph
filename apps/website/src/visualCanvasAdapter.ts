@@ -22,6 +22,36 @@ export interface CanvasEdgeData extends Record<string, unknown> {
 
 export type CanvasNode = Node<CanvasNodeData, "visualNode">;
 export type CanvasEdge = Edge<CanvasEdgeData>;
+export type CanvasEdgeMeaning = VisualEdge["meaning"];
+
+export type CanvasSelection = { kind: "node" | "edge"; id: string } | null;
+
+export const STRUCTURAL_EDGE_MEANINGS: readonly CanvasEdgeMeaning[] = [
+  "uses-layout",
+  "binds-resource",
+  "references-layout",
+  "uses-shader",
+  "uses-bind-group-layout",
+  "uses-pipeline",
+  "uses-bind-group",
+  "contains-pass",
+  "contains-subgraph",
+  "depends-on",
+];
+
+export const EDGE_MEANING_LABELS: Record<CanvasEdgeMeaning, string> = {
+  "uses-layout": "Uses layout",
+  "binds-resource": "Binds resource",
+  "references-layout": "References layout",
+  "uses-shader": "Uses shader",
+  "uses-bind-group-layout": "Uses bind group layout",
+  "uses-pipeline": "Uses pipeline",
+  "uses-bind-group": "Uses bind group",
+  "contains-pass": "Contains pass",
+  "contains-subgraph": "Contains subgraph",
+  "depends-on": "Depends on",
+  references: "References",
+};
 
 const GROUP_ORDER = [
   "group:resources",
@@ -97,4 +127,75 @@ export function toReactFlowGraph(projection: VisualProjection): {
   })) satisfies CanvasEdge[];
 
   return { nodes, edges };
+}
+
+export function deriveVisibleCanvasGraph(
+  nodes: CanvasNode[],
+  edges: CanvasEdge[],
+  enabledMeanings: ReadonlySet<VisualEdge["meaning"]>,
+  selection: CanvasSelection,
+): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
+  const visibleEdges = filterCanvasEdges(edges, enabledMeanings);
+  const adjacent = getAdjacentElementIds(visibleEdges, selection);
+  const hasSelection = selection !== null;
+
+  return {
+    nodes: nodes.map((node) => ({
+      ...node,
+      className: getElementClass(hasSelection, adjacent.nodeIds.has(node.id)),
+    })),
+    edges: visibleEdges.map((edge) => ({
+      ...edge,
+      className: getElementClass(hasSelection, adjacent.edgeIds.has(edge.id)),
+    })),
+  };
+}
+
+export function filterCanvasEdges(
+  edges: CanvasEdge[],
+  enabledMeanings: ReadonlySet<VisualEdge["meaning"]>,
+): CanvasEdge[] {
+  return edges.filter((edge) => edge.data && enabledMeanings.has(edge.data.meaning));
+}
+
+export function getAdjacentElementIds(
+  edges: CanvasEdge[],
+  selection: CanvasSelection,
+): { nodeIds: Set<string>; edgeIds: Set<string> } {
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+
+  if (!selection) {
+    return { nodeIds, edgeIds };
+  }
+
+  if (selection.kind === "edge") {
+    const edge = edges.find((candidate) => candidate.id === selection.id);
+    if (edge) {
+      edgeIds.add(edge.id);
+      nodeIds.add(edge.source);
+      nodeIds.add(edge.target);
+    }
+    return { nodeIds, edgeIds };
+  }
+
+  nodeIds.add(selection.id);
+  for (const edge of edges) {
+    if (edge.source !== selection.id && edge.target !== selection.id) {
+      continue;
+    }
+
+    edgeIds.add(edge.id);
+    nodeIds.add(edge.source);
+    nodeIds.add(edge.target);
+  }
+
+  return { nodeIds, edgeIds };
+}
+
+function getElementClass(hasSelection: boolean, active: boolean): string | undefined {
+  if (!hasSelection) {
+    return undefined;
+  }
+  return active ? "is-adjacent" : "is-dimmed";
 }

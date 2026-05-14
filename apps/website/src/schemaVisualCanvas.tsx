@@ -3,16 +3,27 @@ import "@xyflow/react/dist/style.css";
 import {
   Background,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   type NodeProps,
 } from "@xyflow/react";
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createVisualProjection, type VisualProjection } from "editor";
 import { createPbfSimulationSchema } from "schema/examples/pbf-simulation";
 import type { ValidationError, WebGpuSimulationSchema } from "schema";
-import { toReactFlowGraph, type CanvasNode } from "./visualCanvasAdapter.ts";
+import {
+  deriveVisibleCanvasGraph,
+  EDGE_MEANING_LABELS,
+  STRUCTURAL_EDGE_MEANINGS,
+  toReactFlowGraph,
+  type CanvasEdgeMeaning,
+  type CanvasNode,
+  type CanvasSelection,
+} from "./visualCanvasAdapter.ts";
 
 export interface SchemaVisualCanvasState {
   schema: WebGpuSimulationSchema;
@@ -59,11 +70,31 @@ export function mountSchemaVisualCanvas(container: HTMLElement): SchemaVisualCan
 }
 
 function SchemaVisualCanvas({ state }: { state: SchemaVisualCanvasState }) {
+  const [selection, setSelection] = useState<CanvasSelection>(null);
+  const [enabledMeanings, setEnabledMeanings] = useState(() => new Set(STRUCTURAL_EDGE_MEANINGS));
   const projection = createVisualProjection(state.schema, {
     diagnostics: state.diagnostics,
     validate: state.diagnostics === undefined,
   });
-  const { nodes, edges } = toReactFlowGraph(projection);
+  const graph = toReactFlowGraph(projection);
+  const { nodes, edges } = deriveVisibleCanvasGraph(
+    graph.nodes,
+    graph.edges,
+    enabledMeanings,
+    selection,
+  );
+
+  const toggleEdgeMeaning = (meaning: CanvasEdgeMeaning): void => {
+    setEnabledMeanings((current) => {
+      const next = new Set(current);
+      if (next.has(meaning)) {
+        next.delete(meaning);
+      } else {
+        next.add(meaning);
+      }
+      return next;
+    });
+  };
 
   return (
     <section className="visual-canvas page" aria-labelledby="visual-canvas-title">
@@ -101,13 +132,22 @@ function SchemaVisualCanvas({ state }: { state: SchemaVisualCanvasState }) {
             multiSelectionKeyCode={null}
             minZoom={0.18}
             maxZoom={1.8}
+            onNodeClick={(_, node) => setSelection({ kind: "node", id: node.id })}
+            onEdgeClick={(_, edge) => setSelection({ kind: "edge", id: edge.id })}
+            onPaneClick={() => setSelection(null)}
           >
             <Background color="rgba(148, 186, 255, 0.22)" gap={24} />
             <MiniMap pannable zoomable nodeColor={getMiniMapNodeColor} />
             <Controls showInteractive={false} />
           </ReactFlow>
         </article>
-        <VisualCanvasSummary projection={projection} state={state} />
+        <VisualCanvasSummary
+          enabledMeanings={enabledMeanings}
+          projection={projection}
+          state={state}
+          visibleEdgeCount={edges.length}
+          onToggleEdgeMeaning={toggleEdgeMeaning}
+        />
       </section>
     </section>
   );
@@ -119,6 +159,12 @@ function VisualNodeCard({ data, selected }: NodeProps<CanvasNode>) {
       className={`visual-node visual-node--${data.kind} visual-node--severity-${data.severity}${selected ? " is-selected" : ""}`}
       title={`${data.sourcePath}. ${data.readonlyReason}`}
     >
+      <Handle
+        className="visual-node__handle visual-node__handle--target"
+        isConnectable={false}
+        position={Position.Left}
+        type="target"
+      />
       <div className="visual-node__group">{data.groupLabel}</div>
       <div className="visual-node__label">{data.label}</div>
       <div className="visual-node__meta">
@@ -132,6 +178,12 @@ function VisualNodeCard({ data, selected }: NodeProps<CanvasNode>) {
           </span>
         ))}
       </div>
+      <Handle
+        className="visual-node__handle visual-node__handle--source"
+        isConnectable={false}
+        position={Position.Right}
+        type="source"
+      />
     </div>
   );
 }
@@ -139,9 +191,15 @@ function VisualNodeCard({ data, selected }: NodeProps<CanvasNode>) {
 function VisualCanvasSummary({
   projection,
   state,
+  visibleEdgeCount,
+  enabledMeanings,
+  onToggleEdgeMeaning,
 }: {
   projection: VisualProjection;
   state: SchemaVisualCanvasState;
+  visibleEdgeCount: number;
+  enabledMeanings: ReadonlySet<CanvasEdgeMeaning>;
+  onToggleEdgeMeaning: (meaning: CanvasEdgeMeaning) => void;
 }) {
   const severityCounts = projection.diagnostics.reduce(
     (counts, diagnostic) => ({
@@ -163,7 +221,9 @@ function VisualCanvasSummary({
           </div>
           <div>
             <dt>Edges</dt>
-            <dd>{projection.edges.length}</dd>
+            <dd>
+              {visibleEdgeCount} / {projection.edges.length}
+            </dd>
           </div>
           <div>
             <dt>Severity</dt>
@@ -178,6 +238,22 @@ function VisualCanvasSummary({
             <dd>{formatDraftState(state)}</dd>
           </div>
         </dl>
+      </article>
+
+      <article className="visual-summary-card">
+        <div className="inspector-card__eyebrow">Edge Filters</div>
+        <div className="visual-filter-list">
+          {STRUCTURAL_EDGE_MEANINGS.map((meaning) => (
+            <label key={meaning} className="visual-filter-toggle">
+              <input
+                checked={enabledMeanings.has(meaning)}
+                onChange={() => onToggleEdgeMeaning(meaning)}
+                type="checkbox"
+              />
+              <span>{EDGE_MEANING_LABELS[meaning]}</span>
+            </label>
+          ))}
+        </div>
       </article>
 
       <article className="visual-summary-card">

@@ -1,6 +1,7 @@
 import "./styles.css";
 
 import { mountPbfDemo } from "./pbfDemo.ts";
+import { mountModuleDependencyGraph } from "./moduleDependencyGraph.ts";
 import { mountSchemaDesigner } from "./schemaDesigner.ts";
 import { mountSchemaInspector } from "./schemaInspector.ts";
 import { mountSchemaVisualCanvas } from "./schemaVisualCanvas.tsx";
@@ -12,9 +13,10 @@ type FatalContext = {
 
 const APP_SHELL = `
   <div data-mount="pbf-demo"></div>
+  <div data-mount="schema-visual-canvas"></div>
   <div data-mount="schema-designer"></div>
   <div data-mount="schema-inspector"></div>
-  <div data-mount="schema-visual-canvas"></div>
+  <div data-mount="module-dependency-graph"></div>
 `;
 
 function showFatalError(target: HTMLElement, context: FatalContext): void {
@@ -86,12 +88,13 @@ function bootstrap(): void {
   const designerMount = app.querySelector<HTMLElement>('[data-mount="schema-designer"]');
   const inspectorMount = app.querySelector<HTMLElement>('[data-mount="schema-inspector"]');
   const visualCanvasMount = app.querySelector<HTMLElement>('[data-mount="schema-visual-canvas"]');
+  const moduleGraphMount = app.querySelector<HTMLElement>('[data-mount="module-dependency-graph"]');
 
-  if (!demoMount || !designerMount || !inspectorMount || !visualCanvasMount) {
+  if (!demoMount || !designerMount || !inspectorMount || !visualCanvasMount || !moduleGraphMount) {
     showFatalError(app, {
       reason: "Missing application mount point.",
       details:
-        "Expected demo, schema designer, schema inspector, and schema visual canvas mount elements before initialization.",
+        "Expected demo, schema visual canvas, schema designer, schema inspector, and module dependency graph mount elements before initialization.",
     });
     return;
   }
@@ -109,6 +112,7 @@ function bootstrap(): void {
     },
   });
   mountSchemaInspector(inspectorMount);
+  mountModuleDependencyGraph(moduleGraphMount);
 
   try {
     void previewHandle.catch((error: unknown) => {
