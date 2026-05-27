@@ -28,3 +28,5 @@ dist-ssr
 .kilo
 .playwright-mcp/
 .sisyphus/
+.opencode/
+.codex/
