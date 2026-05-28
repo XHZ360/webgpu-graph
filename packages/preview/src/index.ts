@@ -9,10 +9,33 @@ export {
 export type { CreateDispatchExecutionContextOptions } from "./dispatchExecutionContext.ts";
 export { getRequiredDeviceLimits } from "./deviceLimits.ts";
 
-export type PreviewFrame = {
-  html: string;
-};
+export const requestDevice = async (requiredLimits?: GPUSupportedLimits): Promise<GPUDevice> => {
+  if (!("gpu" in navigator)) {
+    throw new Error("WebGPU is not supported in this browser.");
+  }
 
-export function createPreviewFrame(html: string): PreviewFrame {
-  return { html };
-}
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    throw new Error("No suitable GPU adapter found.");
+  }
+
+  if (requiredLimits) {
+    if (
+      requiredLimits.maxStorageBuffersPerShaderStage !== undefined &&
+      adapter.limits.maxStorageBuffersPerShaderStage <
+        requiredLimits.maxStorageBuffersPerShaderStage
+    ) {
+      throw new Error("This adapter does not satisfy the schema-required WebGPU limits.");
+    }
+
+    if (requiredLimits.maxStorageBuffersPerShaderStage !== undefined) {
+      return adapter.requestDevice({
+        requiredLimits: {
+          maxStorageBuffersPerShaderStage: requiredLimits.maxStorageBuffersPerShaderStage,
+        },
+      });
+    }
+  }
+
+  return adapter.requestDevice();
+};
