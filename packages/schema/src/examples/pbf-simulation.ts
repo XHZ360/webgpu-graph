@@ -27,8 +27,15 @@ const GRID_HEIGHT = 16;
 const MAX_PARTICLES_PER_CELL = 100;
 const MAX_NEIGHBORS = 100;
 const WORKGROUP_SIZE = 128;
-const SIM_PARAMS_FLOAT_COUNT = 36;
-const SIM_PARAMS_SIZE = 36 * 4; // 36 floats = 144 bytes
+const SIM_PARAMS_BASE_FLOAT_COUNT = 36;
+const BOUNDARY_PROFILE_SAMPLE_COUNT = 128;
+const BOUNDARY_PROFILE_META_FLOAT_COUNT = 4;
+const BOUNDARY_PROFILE_FLOAT_COUNT = BOUNDARY_PROFILE_SAMPLE_COUNT * 2;
+const BOUNDARY_PROFILE_START_FLOAT_INDEX = SIM_PARAMS_BASE_FLOAT_COUNT;
+const SIM_PARAMS_FLOAT_COUNT =
+  SIM_PARAMS_BASE_FLOAT_COUNT + BOUNDARY_PROFILE_META_FLOAT_COUNT + BOUNDARY_PROFILE_FLOAT_COUNT;
+const SIM_PARAMS_SIZE = SIM_PARAMS_FLOAT_COUNT * 4;
+const SIM_PARAMS_VEC4_COUNT = Math.ceil(SIM_PARAMS_FLOAT_COUNT / 4);
 
 const INITIAL_PARTICLE_COLUMNS = 60;
 const INITIAL_PARTICLE_ROWS = 20;
@@ -39,8 +46,11 @@ export const PBF_GRID_HEIGHT = GRID_HEIGHT;
 export const PBF_MAX_PARTICLES_PER_CELL = MAX_PARTICLES_PER_CELL;
 export const PBF_MAX_NEIGHBORS = MAX_NEIGHBORS;
 export const PBF_WORKGROUP_SIZE = WORKGROUP_SIZE;
+export const PBF_BOUNDARY_PROFILE_SAMPLE_COUNT = BOUNDARY_PROFILE_SAMPLE_COUNT;
+export const PBF_BOUNDARY_PROFILE_FLOAT_COUNT = BOUNDARY_PROFILE_FLOAT_COUNT;
 export const PBF_SIM_PARAMS_FLOAT_COUNT = SIM_PARAMS_FLOAT_COUNT;
 export const PBF_SIM_PARAMS_SIZE = SIM_PARAMS_SIZE;
+export const PBF_SIM_PARAMS_VEC4_COUNT = SIM_PARAMS_VEC4_COUNT;
 
 export const PBF_SIMULATION_METADATA = Object.freeze({
   particleCount: PBF_NUM_PARTICLES,
@@ -50,6 +60,9 @@ export const PBF_SIMULATION_METADATA = Object.freeze({
   maxNeighbors: PBF_MAX_NEIGHBORS,
   pbfIterations: 5,
   workgroupSize: PBF_WORKGROUP_SIZE,
+  boundaryProfileSampleCount: PBF_BOUNDARY_PROFILE_SAMPLE_COUNT,
+  boundaryProfileFloatCount: PBF_BOUNDARY_PROFILE_FLOAT_COUNT,
+  simParamsVec4Count: PBF_SIM_PARAMS_VEC4_COUNT,
   simParamsFloatCount: PBF_SIM_PARAMS_FLOAT_COUNT,
   simParamsSize: PBF_SIM_PARAMS_SIZE,
 });
@@ -92,6 +105,15 @@ export interface PbfSimulationParams {
   velocityDamping: number;
 }
 
+export interface PbfBoundaryProfile {
+  cellCount: number;
+  minY: number;
+  maxY: number;
+  innerMargin?: number;
+  left: ArrayLike<number>;
+  right: ArrayLike<number>;
+}
+
 export interface PbfInitialParticleState {
   positions: Float32Array;
   oldPositions: Float32Array;
@@ -104,6 +126,10 @@ function computePoly6Factor(h: number): number {
 
 function computeSpikyGradFactor(h: number): number {
   return -45 / (Math.PI * Math.pow(h, 6));
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
 // These defaults are chosen conservatively for a deterministic demo reset path.
@@ -207,6 +233,49 @@ export function createPbfInitialPositions(
   return positions;
 }
 
+export function createPbfInitialPositionsFromBoundaryProfile(
+  profile: PbfBoundaryProfile,
+  overrides: Partial<PbfSimulationParams> = {},
+): Float32Array {
+  const params = resolvePbfSimulationParams(overrides);
+  const positions = new Float32Array(PBF_NUM_PARTICLES * 2);
+  const cellCount = clampInt(profile.cellCount, 1, PBF_BOUNDARY_PROFILE_SAMPLE_COUNT);
+  const minY = profile.minY;
+  const maxY = profile.maxY;
+  const innerMargin = profile.innerMargin ?? params.particleRadiusInWorld;
+  const verticalSpan = maxY - minY;
+  const rowStride = cellCount > 1 ? verticalSpan / (cellCount - 1) : 0;
+  const step = params.particleRadiusInWorld * 2.05;
+
+  let particleIndex = 0;
+  for (let row = 0; row < cellCount && particleIndex < PBF_NUM_PARTICLES; row += 1) {
+    const y = minY + row * rowStride;
+    const rawLeft = profile.left[row] ?? profile.left[cellCount - 1] ?? 0;
+    const rawRight = profile.right[row] ?? profile.right[cellCount - 1] ?? rawLeft;
+    const left = Math.min(rawLeft, rawRight);
+    const right = Math.max(rawLeft, rawRight);
+    const startX = left + innerMargin;
+    const endX = right - innerMargin;
+
+    if (endX <= startX) {
+      continue;
+    }
+
+    for (let x = startX; x <= endX && particleIndex < PBF_NUM_PARTICLES; x += step) {
+      const offset = particleIndex * 2;
+      positions[offset] = x;
+      positions[offset + 1] = y;
+      particleIndex += 1;
+    }
+  }
+
+  if (particleIndex === 0) {
+    return createPbfInitialPositions(overrides);
+  }
+
+  return positions;
+}
+
 export function createPbfInitialVelocities(): Float32Array {
   const velocities = new Float32Array(PBF_NUM_PARTICLES * 2);
   let seed = 0x12345678;
@@ -231,8 +300,41 @@ export function createPbfInitialParticleState(
   };
 }
 
+export function createPbfInitialParticleStateFromBoundaryProfile(
+  profile: PbfBoundaryProfile,
+  overrides: Partial<PbfSimulationParams> = {},
+): PbfInitialParticleState {
+  const positions = createPbfInitialPositionsFromBoundaryProfile(profile, overrides);
+
+  return {
+    positions,
+    oldPositions: new Float32Array(positions),
+    velocities: createPbfInitialVelocities(),
+  };
+}
+
+export function packPbfBoundaryProfile(profile: PbfBoundaryProfile): Float32Array {
+  const packed = new Float32Array(BOUNDARY_PROFILE_META_FLOAT_COUNT + BOUNDARY_PROFILE_FLOAT_COUNT);
+  const cellCount = clampInt(profile.cellCount, 1, PBF_BOUNDARY_PROFILE_SAMPLE_COUNT);
+  packed[0] = cellCount;
+  packed[1] = profile.minY;
+  packed[2] = profile.maxY;
+  packed[3] = profile.innerMargin ?? 0;
+
+  for (let i = 0; i < PBF_BOUNDARY_PROFILE_SAMPLE_COUNT; i += 1) {
+    const left = profile.left[i] ?? profile.left[cellCount - 1] ?? 0;
+    const right = profile.right[i] ?? profile.right[cellCount - 1] ?? left;
+    const offset = BOUNDARY_PROFILE_META_FLOAT_COUNT + i * 2;
+    packed[offset] = left;
+    packed[offset + 1] = right;
+  }
+
+  return packed;
+}
+
 export function packPbfSimulationParams(
   overrides: Partial<PbfSimulationParams> = {},
+  boundaryProfile?: PbfBoundaryProfile,
 ): Float32Array {
   const params = resolvePbfSimulationParams(overrides);
   const packed = new Float32Array(PBF_SIM_PARAMS_FLOAT_COUNT);
@@ -273,6 +375,10 @@ export function packPbfSimulationParams(
   packed[33] = params.gravityX;
   packed[34] = params.gravityY;
   packed[35] = params.velocityDamping;
+  const profile = boundaryProfile
+    ? packPbfBoundaryProfile(boundaryProfile)
+    : new Float32Array(BOUNDARY_PROFILE_META_FLOAT_COUNT + BOUNDARY_PROFILE_FLOAT_COUNT);
+  packed.set(profile, BOUNDARY_PROFILE_START_FLOAT_INDEX);
 
   return packed;
 }
@@ -309,7 +415,7 @@ struct I32Buffer {
 @group(0) @binding(7) var<storage, read_write> neighbors: I32Buffer;
 
 struct SimParams {
-  data: array<vec4<f32>, 9>,
+  data: array<vec4<f32>, ${SIM_PARAMS_VEC4_COUNT}>,
 }
 
 @group(0) @binding(8) var<uniform> simParams: SimParams;
@@ -343,9 +449,6 @@ fn corrK() -> f32 { return simParam(17u); }
 fn poly6Factor() -> f32 { return simParam(18u); }
 fn spikyGradFactor() -> f32 { return simParam(19u); }
 fn cellReciprocal() -> f32 { return simParam(20u); }
-fn gravityX() -> f32 { return simParam(33u); }
-fn gravityY() -> f32 { return simParam(34u); }
-fn velocityDamping() -> f32 { return simParam(35u); }
 fn boundaryMode() -> u32 { return u32(simParam(22u)); }
 fn boundaryCenterX() -> f32 { return simParam(23u); }
 fn boundaryCenterY() -> f32 { return simParam(26u); }
@@ -353,8 +456,15 @@ fn boundaryHalfHeight() -> f32 { return simParam(27u); }
 fn boundaryBezierNeckWidth() -> f32 { return simParam(28u); }
 fn boundaryBezierTopWidth() -> f32 { return simParam(29u); }
 fn boundaryBezierBottomWidth() -> f32 { return simParam(30u); }
+fn boundaryProfileCellCount() -> u32 { return u32(simParam(${BOUNDARY_PROFILE_START_FLOAT_INDEX}u)); }
+fn boundaryProfileMinY() -> f32 { return simParam(${BOUNDARY_PROFILE_START_FLOAT_INDEX + 1}u); }
+fn boundaryProfileMaxY() -> f32 { return simParam(${BOUNDARY_PROFILE_START_FLOAT_INDEX + 2}u); }
+fn boundaryProfileInnerMargin() -> f32 { return simParam(${BOUNDARY_PROFILE_START_FLOAT_INDEX + 3}u); }
 fn inertialAccelX() -> f32 { return simParam(31u); }
 fn inertialAccelY() -> f32 { return simParam(32u); }
+fn gravityX() -> f32 { return simParam(33u); }
+fn gravityY() -> f32 { return simParam(34u); }
+fn velocityDamping() -> f32 { return simParam(35u); }
 fn viscosityEnabled() -> f32 { return simParam(24u); }
 fn viscosityC() -> f32 { return simParam(25u); }
 
@@ -375,6 +485,26 @@ fn boundaryBezierHalfWidth(y: f32, pRad: f32, bmin: f32) -> f32 {
     yDelta >= 0.0,
   );
   return neckHalfWidth + (endHalfWidth - neckHalfWidth) * cubicBezierEase(localY);
+}
+
+fn boundaryProfileTAt(y: f32) -> f32 {
+  let cellCount = max(boundaryProfileCellCount(), 1u);
+  let minY = boundaryProfileMinY();
+  let maxY = boundaryProfileMaxY();
+  let t = clamp((y - minY) / max(maxY - minY, epsilon()), 0.0, 1.0);
+  return t * f32(cellCount - 1u);
+}
+
+fn boundaryProfileLeftRightAt(index: u32) -> vec2<f32> {
+  let base = ${BOUNDARY_PROFILE_START_FLOAT_INDEX + BOUNDARY_PROFILE_META_FLOAT_COUNT}u + index * 2u;
+  return vec2<f32>(simParam(base), simParam(base + 1u));
+}
+
+fn boundaryProfileLeftRightAtY(y: f32) -> vec2<f32> {
+  let profileT = boundaryProfileTAt(y);
+  let lo = u32(floor(profileT));
+  let hi = min(lo + 1u, max(boundaryProfileCellCount(), 1u) - 1u);
+  return mix(boundaryProfileLeftRightAt(lo), boundaryProfileLeftRightAt(hi), fract(profileT));
 }
 
 fn inGrid(cell: vec2<i32>) -> bool {
@@ -406,6 +536,15 @@ fn confinePosition(pos: vec2<f32>) -> vec2<f32> {
   let bmin = pRad;
   let bmax = vec2<f32>(boundaryX() - pRad, boundaryY() - pRad);
   var out = pos;
+
+  if (boundaryMode() == 2u) {
+    let top = boundaryProfileMaxY() - pRad;
+    let bottom = boundaryProfileMinY() + pRad;
+    out.y = clamp(out.y, bottom + epsilon(), top - epsilon());
+    let lr = boundaryProfileLeftRightAtY(out.y);
+    out.x = clamp(out.x, lr.x + boundaryProfileInnerMargin() + pRad, lr.y - boundaryProfileInnerMargin() - pRad);
+    return out;
+  }
 
   if (boundaryMode() == 1u) {
     let yHalfSpan = max(boundaryHalfHeight() - pRad, epsilon());

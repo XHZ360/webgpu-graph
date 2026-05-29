@@ -8,9 +8,12 @@ import {
   createPbfSimulationSchema,
   PBF_GRID_HEIGHT,
   PBF_GRID_WIDTH,
+  PBF_BOUNDARY_PROFILE_FLOAT_COUNT,
+  PBF_BOUNDARY_PROFILE_SAMPLE_COUNT,
   PBF_NUM_PARTICLES,
   PBF_SIM_PARAMS_FLOAT_COUNT,
   PBF_SIM_PARAMS_SIZE,
+  PBF_SIM_PARAMS_VEC4_COUNT,
   PBF_SIMULATION_METADATA,
   PBF_WORKGROUP_SIZE,
   createPbfInitialParticleState,
@@ -150,6 +153,9 @@ describe("PBF Simulation Schema", () => {
       maxNeighbors: 100,
       pbfIterations: 5,
       workgroupSize: PBF_WORKGROUP_SIZE,
+      boundaryProfileSampleCount: PBF_BOUNDARY_PROFILE_SAMPLE_COUNT,
+      boundaryProfileFloatCount: PBF_BOUNDARY_PROFILE_FLOAT_COUNT,
+      simParamsVec4Count: PBF_SIM_PARAMS_VEC4_COUNT,
       simParamsFloatCount: PBF_SIM_PARAMS_FLOAT_COUNT,
       simParamsSize: PBF_SIM_PARAMS_SIZE,
     });
@@ -217,9 +223,44 @@ describe("PBF Simulation Schema", () => {
     expect(packed[28]).toBeCloseTo(20);
     expect(packed[29]).toBeCloseTo(80);
     expect(packed[30]).toBeCloseTo(80);
-    expect(packed[33]).toBe(0);
+    expect(packed[31]).toBe(0);
+    expect(packed[32]).toBe(0);
+    expect(packed[33]).toBeCloseTo(0);
     expect(packed[34]).toBeCloseTo(-9.8);
     expect(packed[35]).toBeCloseTo(0.985);
+    expect(packed[36]).toBe(0);
+    expect(packed[37]).toBe(0);
+    expect(packed[38]).toBe(0);
+    expect(packed[39]).toBe(0);
+    expect(packed[40]).toBe(0);
+    expect(packed[41]).toBe(0);
+    expect(packed[42]).toBe(0);
+    expect(packed[43]).toBe(0);
+    expect(packed[44]).toBe(0);
+  });
+
+  it("packs boundary profile data after the base simulation params", () => {
+    const profile = {
+      cellCount: 3,
+      minY: 2,
+      maxY: 6,
+      innerMargin: 0.25,
+      left: [1, 2, 3],
+      right: [7, 8, 9],
+    };
+    const packed = packPbfSimulationParams({ boundaryMode: 2 }, profile);
+
+    expect(packed[22]).toBe(2);
+    expect(packed[36]).toBe(3);
+    expect(packed[37]).toBe(2);
+    expect(packed[38]).toBe(6);
+    expect(packed[39]).toBe(0.25);
+    expect(packed[40]).toBe(1);
+    expect(packed[41]).toBe(7);
+    expect(packed[42]).toBe(2);
+    expect(packed[43]).toBe(8);
+    expect(packed[44]).toBe(3);
+    expect(packed[45]).toBe(9);
   });
 
   it("recomputes derived params when overrides change domain scale", () => {

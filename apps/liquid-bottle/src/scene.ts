@@ -6,9 +6,11 @@ import {
   SimulationRunner,
 } from "preview";
 import {
-  createPbfInitialParticleState,
+  createPbfInitialParticleStateFromBoundaryProfile,
   packPbfSimulationParams,
+  type PbfBoundaryProfile,
   PBF_NUM_PARTICLES,
+  PBF_BOUNDARY_PROFILE_SAMPLE_COUNT,
   PBF_GRID_HEIGHT,
   PBF_GRID_WIDTH,
   PBF_MAX_PARTICLES_PER_CELL,
@@ -17,10 +19,108 @@ import {
   pbfSimulationSchema,
 } from "schema/examples/pbf-simulation";
 
-const WORLD_SIZE = { x: 80, y: 40 };
+const SVG_VIEWBOX = { width: 1600, height: 900 };
+const SVG_TO_WORLD = 0.1;
+const WORLD_SIZE = {
+  x: SVG_VIEWBOX.width * SVG_TO_WORLD,
+  y: SVG_VIEWBOX.height * SVG_TO_WORLD,
+};
 const SURFACE_KERNEL_RADIUS = 2.4;
 const SURFACE_THRESHOLD = 0.45;
 const GRID_CELL_SIZE = WORLD_SIZE.x / PBF_GRID_WIDTH;
+const BOTTLE_BOUNDARY_PROFILE: PbfBoundaryProfile = createBottleBoundaryProfile();
+const BOTTLE_SIMULATION_PARAMS = {
+  boundaryMode: 2,
+  boundaryX: WORLD_SIZE.x,
+  boundaryY: WORLD_SIZE.y,
+};
+
+function svgPointToWorld(x: number, y: number): { x: number; y: number } {
+  return {
+    x: x * SVG_TO_WORLD,
+    y: (SVG_VIEWBOX.height - y) * SVG_TO_WORLD,
+  };
+}
+
+function cubicBezierPoint(t: number, p0: number, p1: number, p2: number, p3: number): number {
+  const inverse = 1 - t;
+  return (
+    inverse * inverse * inverse * p0 +
+    3 * inverse * inverse * t * p1 +
+    3 * inverse * t * t * p2 +
+    t * t * t * p3
+  );
+}
+
+function cubicXAtY(
+  y: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number,
+): number {
+  let minT = 0;
+  let maxT = 1;
+
+  for (let i = 0; i < 18; i += 1) {
+    const midT = (minT + maxT) * 0.5;
+    const midY = cubicBezierPoint(midT, y0, y1, y2, y3);
+    if (midY < y) {
+      minT = midT;
+    } else {
+      maxT = midT;
+    }
+  }
+
+  return cubicBezierPoint((minT + maxT) * 0.5, x0, x1, x2, x3);
+}
+
+function rightBottleBoundarySvgXAtY(y: number): number {
+  if (y <= 259) {
+    return 910;
+  }
+
+  if (y <= 402) {
+    return cubicXAtY(y, 910, 259, 910, 317, 931, 364, 973, 402);
+  }
+
+  if (y <= 676) {
+    return cubicXAtY(y, 973, 402, 1042, 464, 1082, 564, 1082, 676);
+  }
+
+  return cubicXAtY(y, 1082, 676, 1082, 733, 1062, 760, 1021, 760);
+}
+
+function createBottleBoundaryProfile(): PbfBoundaryProfile {
+  const left = new Float32Array(PBF_BOUNDARY_PROFILE_SAMPLE_COUNT);
+  const right = new Float32Array(PBF_BOUNDARY_PROFILE_SAMPLE_COUNT);
+  const minY = svgPointToWorld(0, 760).y;
+  const maxY = svgPointToWorld(0, 220).y;
+  const centerX = SVG_VIEWBOX.width * 0.5;
+
+  for (let i = 0; i < PBF_BOUNDARY_PROFILE_SAMPLE_COUNT; i += 1) {
+    const t = i / (PBF_BOUNDARY_PROFILE_SAMPLE_COUNT - 1);
+    const y = minY + (maxY - minY) * t;
+    const svgY = SVG_VIEWBOX.height - y / SVG_TO_WORLD;
+    const svgRight = rightBottleBoundarySvgXAtY(svgY);
+    const svgLeft = centerX - (svgRight - centerX);
+    left[i] = svgPointToWorld(svgLeft, svgY).x;
+    right[i] = svgPointToWorld(svgRight, svgY).x;
+  }
+
+  return {
+    cellCount: PBF_BOUNDARY_PROFILE_SAMPLE_COUNT,
+    minY,
+    maxY,
+    innerMargin: 0.2,
+    left,
+    right,
+  };
+}
 
 const gridShaders = `
 struct Vec2Buffer {
@@ -96,9 +196,26 @@ struct VertexOut {
   @location(0) world : vec2f,
 }
 
+struct SurfaceParams {
+  data: array<vec4f, 2>,
+}
+
 @group(0) @binding(0) var<storage, read> positions: Vec2Buffer;
 @group(0) @binding(1) var<storage, read> gridCounts: U32Buffer;
 @group(0) @binding(2) var<storage, read> grid2Particles: U32Buffer;
+@group(0) @binding(3) var<uniform> surfaceParams: SurfaceParams;
+
+fn canvasSize() -> vec2f {
+  return surfaceParams.data[0].xy;
+}
+
+fn coverScale() -> f32 {
+  return surfaceParams.data[0].z;
+}
+
+fn coverOffset() -> vec2f {
+  return surfaceParams.data[1].xy;
+}
 
 fn inGrid(cell: vec2<i32>) -> bool {
   return cell.x >= 0 &&
@@ -135,10 +252,8 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOut
 
   var output : VertexOut;
   output.position = vec4f(clip, 0.0, 1.0);
-  output.world = vec2f(
-    (clip.x + 1.0) * 0.5 * ${WORLD_SIZE.x}.0,
-    (clip.y + 1.0) * 0.5 * ${WORLD_SIZE.y}.0,
-  );
+  let pixel = (clip + vec2f(1.0, 1.0)) * 0.5 * canvasSize();
+  output.world = (pixel - coverOffset()) / coverScale();
   return output;
 }
 
@@ -228,15 +343,44 @@ export async function run() {
 
   const canvas: HTMLCanvasElement | null = document.querySelector("#liquid-bottle-canvas");
   if (!canvas) throw new Error("Canvas element not found.");
-
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.floor(rect.width));
-  canvas.height = Math.max(1, Math.floor(rect.height));
+  const canvasElement = canvas;
 
   const context: GPUCanvasContext | null = canvas.getContext("webgpu");
   if (!context) throw new Error("Unable to acquire WebGPU context from canvas.");
   const gpuContext = context;
   const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+
+  const surfaceParamsBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  let surfaceWidth = 0;
+  let surfaceHeight = 0;
+
+  function updateSurfaceSize() {
+    if (!device) return;
+
+    const rect = canvasElement.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width));
+    const height = Math.max(1, Math.floor(rect.height));
+    if (surfaceWidth === width && surfaceHeight === height) return;
+
+    surfaceWidth = width;
+    surfaceHeight = height;
+    canvasElement.width = width;
+    canvasElement.height = height;
+
+    const coverScale = Math.max(width / WORLD_SIZE.x, height / WORLD_SIZE.y);
+    const coverOffsetX = (width - WORLD_SIZE.x * coverScale) * 0.5;
+    const coverOffsetY = (height - WORLD_SIZE.y * coverScale) * 0.5;
+    device.queue.writeBuffer(
+      surfaceParamsBuffer,
+      0,
+      new Float32Array([width, height, coverScale, 0, coverOffsetX, coverOffsetY, 0, 0]),
+    );
+  }
+
+  updateSurfaceSize();
 
   gpuContext.configure({
     device,
@@ -244,8 +388,11 @@ export async function run() {
     alphaMode: "premultiplied",
   });
 
-  const initialState = createPbfInitialParticleState();
-  const simParams = packPbfSimulationParams();
+  const initialState = createPbfInitialParticleStateFromBoundaryProfile(
+    BOTTLE_BOUNDARY_PROFILE,
+    BOTTLE_SIMULATION_PARAMS,
+  );
+  const simParams = packPbfSimulationParams(BOTTLE_SIMULATION_PARAMS, BOTTLE_BOUNDARY_PROFILE);
   runner.writeBuffer("positions", initialState.positions);
   runner.writeBuffer("oldPositions", initialState.oldPositions);
   runner.writeBuffer("velocities", initialState.velocities);
@@ -332,6 +479,11 @@ export async function run() {
         visibility: GPUShaderStage.FRAGMENT,
         buffer: { type: "read-only-storage" },
       },
+      {
+        binding: 3,
+        visibility: GPUShaderStage.VERTEX,
+        buffer: { type: "uniform" },
+      },
     ],
   });
   const surfaceBindGroup = device.createBindGroup({
@@ -348,6 +500,10 @@ export async function run() {
       {
         binding: 2,
         resource: { buffer: grid2ParticlesBuffer },
+      },
+      {
+        binding: 3,
+        resource: { buffer: surfaceParamsBuffer },
       },
     ],
   });
@@ -386,6 +542,8 @@ export async function run() {
 
   function frame() {
     if (stopped || activeRunId !== runId) return;
+
+    updateSurfaceSize();
 
     const commandEncoder = gpuDevice.createCommandEncoder();
     const simCommands = simulationRunner.step();
