@@ -18,8 +18,8 @@ function App() {
     };
   }, []);
   return (
-    <main style={{ width: "100%", height: "100%" }}>
-      <canvas id="liquid-bottle-canvas" style={{ width: "100%", height: "100%" }}></canvas>
+    <main className="liquid-bottle-stage">
+      <canvas id="liquid-bottle-canvas" className="liquid-bottle-canvas"></canvas>
     </main>
   );
 }

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Stylized laboratory bottle</title>
+  <desc id="desc">A Unity-style 2D glass bottle with a transparent background.</desc>
+  <defs>
+    <linearGradient id="glass" x1="0.28" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#f7feff" stop-opacity="0.78"/>
+      <stop offset="0.5" stop-color="#bfefff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#5cb7dc" stop-opacity="0.34"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="0.55" stop-color="#8adcf5" stop-opacity="0.46"/>
+      <stop offset="1" stop-color="#25759b" stop-opacity="0.64"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#31536b" flood-opacity="0.22"/>
+    </filter>
+    <clipPath id="bottleClip">
+      <path d="M672 164h256v87c0 47 17 85 51 116 77 69 124 179 124 302 0 78-28 117-86 117H583c-58 0-86-39-86-117 0-123 47-233 124-302 34-31 51-69 51-116z"/>
+    </clipPath>
+  </defs>
+
+  <ellipse cx="800" cy="777" rx="392" ry="48" fill="#496a77" opacity="0.16"/>
+
+  <g filter="url(#softShadow)">
+    <path d="M672 154h256c16 0 29 13 29 29v68c0 55 21 100 62 137 78 70 126 179 126 303 0 100-45 150-135 150H590c-90 0-135-50-135-150 0-124 48-233 126-303 41-37 62-82 62-137v-68c0-16 13-29 29-29z" fill="#234e67" opacity="0.18"/>
+    <path d="M672 164h256v87c0 47 17 85 51 116 77 69 124 179 124 302 0 78-28 117-86 117H583c-58 0-86-39-86-117 0-123 47-233 124-302 34-31 51-69 51-116z" fill="url(#glass)" stroke="#2d7fa3" stroke-width="11" stroke-linejoin="round"/>
+    <path d="M689 116h222c31 0 56 25 56 56v8c0 19-15 34-34 34H667c-19 0-34-15-34-34v-8c0-31 25-56 56-56z" fill="#d8fbff" stroke="#2d7fa3" stroke-width="10"/>
+    <rect x="692" y="75" width="216" height="78" rx="31" fill="#f8ffff" stroke="#2d7fa3" stroke-width="10"/>
+    <path d="M716 91h167" stroke="#ffffff" stroke-width="12" stroke-linecap="round" opacity="0.9"/>
+    <path d="M714 219v35c0 73-31 117-82 164-57 52-88 139-88 249 0 52 12 78 36 78h56" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" opacity="0.62"/>
+    <path d="M957 327c67 67 100 153 100 258" fill="none" stroke="#16506a" stroke-width="9" stroke-linecap="round" opacity="0.18"/>
+    <g clip-path="url(#bottleClip)">
+      <path d="M543 630c61 25 126 25 194 2 70-23 143-27 218 2 62 23 112 22 148-4v157H543z" fill="#74dfff" opacity="0.12"/>
+      <path d="M641 253c35 17 77 26 126 26 63 0 115-11 157-34v41c-50 27-105 41-166 41-45 0-84-8-117-24z" fill="#ffffff" opacity="0.22"/>
+    </g>
+    <path d="M672 164h256v87c0 47 17 85 51 116 77 69 124 179 124 302 0 78-28 117-86 117H583c-58 0-86-39-86-117 0-123 47-233 124-302 34-31 51-69 51-116z" fill="none" stroke="url(#rim)" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M622 457c-24 46-36 100-36 163" stroke="#ffffff" stroke-width="16" stroke-linecap="round" opacity="0.58"/>
+    <path d="M639 404c-8 9-14 19-20 29" stroke="#ffffff" stroke-width="16" stroke-linecap="round" opacity="0.58"/>
+  </g>
+</svg>
