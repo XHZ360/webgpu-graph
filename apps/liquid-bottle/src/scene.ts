@@ -9,17 +9,86 @@ import {
   createPbfInitialParticleState,
   packPbfSimulationParams,
   PBF_NUM_PARTICLES,
+  PBF_GRID_HEIGHT,
+  PBF_GRID_WIDTH,
+  PBF_MAX_PARTICLES_PER_CELL,
   PBF_SIMULATION_METADATA,
+  PBF_WORKGROUP_SIZE,
   pbfSimulationSchema,
 } from "schema/examples/pbf-simulation";
 
 const WORLD_SIZE = { x: 80, y: 40 };
 const SURFACE_KERNEL_RADIUS = 2.4;
 const SURFACE_THRESHOLD = 0.45;
+const GRID_CELL_SIZE = WORLD_SIZE.x / PBF_GRID_WIDTH;
+
+const gridShaders = `
+struct Vec2Buffer {
+  data: array<vec2<f32>>,
+}
+
+struct U32Buffer {
+  data: array<u32>,
+}
+
+struct AtomicU32Buffer {
+  data: array<atomic<u32>>,
+}
+
+@group(0) @binding(0) var<storage, read> positions: Vec2Buffer;
+@group(0) @binding(1) var<storage, read_write> gridCounts: AtomicU32Buffer;
+@group(0) @binding(2) var<storage, read_write> grid2Particles: U32Buffer;
+
+fn inGrid(cell: vec2<i32>) -> bool {
+  return cell.x >= 0 &&
+    cell.y >= 0 &&
+    cell.x < ${PBF_GRID_WIDTH} &&
+    cell.y < ${PBF_GRID_HEIGHT};
+}
+
+fn cellFromPos(pos: vec2<f32>) -> vec2<i32> {
+  return vec2<i32>(floor(pos / ${GRID_CELL_SIZE}));
+}
+
+fn flatCellIndex(cell: vec2<i32>) -> u32 {
+  return u32(cell.y) * ${PBF_GRID_WIDTH}u + u32(cell.x);
+}
+
+fn gridSlotIndex(cellIndex: u32, slot: u32) -> u32 {
+  return cellIndex * ${PBF_MAX_PARTICLES_PER_CELL}u + slot;
+}
+
+@compute @workgroup_size(${PBF_WORKGROUP_SIZE})
+fn clear_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${PBF_GRID_WIDTH * PBF_GRID_HEIGHT}u) { return; }
+
+  atomicStore(&gridCounts.data[i], 0u);
+}
+
+@compute @workgroup_size(${PBF_WORKGROUP_SIZE})
+fn build_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${PBF_NUM_PARTICLES}u) { return; }
+
+  let cell = cellFromPos(positions.data[i]);
+  if (!inGrid(cell)) { return; }
+
+  let cellIndex = flatCellIndex(cell);
+  let slot = atomicAdd(&gridCounts.data[cellIndex], 1u);
+  if (slot < ${PBF_MAX_PARTICLES_PER_CELL}u) {
+    grid2Particles.data[gridSlotIndex(cellIndex, slot)] = i;
+  }
+}
+`;
 
 const surfaceShaders = `
 struct Vec2Buffer {
   data: array<vec2<f32>>,
+}
+
+struct U32Buffer {
+  data: array<u32>,
 }
 
 struct VertexOut {
@@ -28,6 +97,31 @@ struct VertexOut {
 }
 
 @group(0) @binding(0) var<storage, read> positions: Vec2Buffer;
+@group(0) @binding(1) var<storage, read> gridCounts: U32Buffer;
+@group(0) @binding(2) var<storage, read> grid2Particles: U32Buffer;
+
+fn inGrid(cell: vec2<i32>) -> bool {
+  return cell.x >= 0 &&
+    cell.y >= 0 &&
+    cell.x < ${PBF_GRID_WIDTH} &&
+    cell.y < ${PBF_GRID_HEIGHT};
+}
+
+fn cellFromPos(pos: vec2<f32>) -> vec2<i32> {
+  return vec2<i32>(floor(pos / ${GRID_CELL_SIZE}));
+}
+
+fn flatCellIndex(cell: vec2<i32>) -> u32 {
+  return u32(cell.y) * ${PBF_GRID_WIDTH}u + u32(cell.x);
+}
+
+fn gridSlotIndex(cellIndex: u32, slot: u32) -> u32 {
+  return cellIndex * ${PBF_MAX_PARTICLES_PER_CELL}u + slot;
+}
+
+fn gridCountAt(cellIndex: u32) -> u32 {
+  return min(gridCounts.data[cellIndex], ${PBF_MAX_PARTICLES_PER_CELL}u);
+}
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOut
@@ -52,13 +146,24 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOut
 fn fragment_main(fragData: VertexOut) -> @location(0) vec4f
 {
   var density = 0.0;
+  let centerCell = cellFromPos(fragData.world);
 
-  for (var particleIndex = 0u; particleIndex < ${PBF_NUM_PARTICLES}u; particleIndex += 1u) {
-    let delta = fragData.world - positions.data[particleIndex];
-    let distanceValue = length(delta);
-    if (distanceValue < ${SURFACE_KERNEL_RADIUS}) {
-      let normalized = 1.0 - distanceValue / ${SURFACE_KERNEL_RADIUS};
-      density += normalized * normalized * normalized;
+  for (var oy = -1; oy <= 1; oy += 1) {
+    for (var ox = -1; ox <= 1; ox += 1) {
+      let cell = centerCell + vec2<i32>(ox, oy);
+      if (!inGrid(cell)) { continue; }
+
+      let cellIndex = flatCellIndex(cell);
+      let cellCount = gridCountAt(cellIndex);
+      for (var slot = 0u; slot < cellCount; slot += 1u) {
+        let particleIndex = grid2Particles.data[gridSlotIndex(cellIndex, slot)];
+        let delta = fragData.world - positions.data[particleIndex];
+        let distanceValue = length(delta);
+        if (distanceValue < ${SURFACE_KERNEL_RADIUS}) {
+          let normalized = 1.0 - distanceValue / ${SURFACE_KERNEL_RADIUS};
+          density += normalized * normalized * normalized;
+        }
+      }
     }
   }
 
@@ -74,34 +179,52 @@ fn fragment_main(fragData: VertexOut) -> @location(0) vec4f
 }
 `;
 
+let activeRunId = 0;
 let stopCurrentRun: (() => void) | null = null;
+
+export function stop() {
+  activeRunId += 1;
+  stopCurrentRun?.();
+  stopCurrentRun = null;
+}
 
 export async function run() {
   stopCurrentRun?.();
+  const runId = activeRunId + 1;
+  activeRunId = runId;
   let stopped = false;
   let animationFrame = 0;
+  let device: GPUDevice | null = null;
+  let runner: SimulationRunner | null = null;
 
-  const device = await requestDevice(
-    getRequiredDeviceLimits(pbfSimulationSchema) as GPUSupportedLimits,
-  );
+  const stopRun = () => {
+    if (stopped) return;
+    stopped = true;
+    cancelAnimationFrame(animationFrame);
+    runner?.dispose();
+    device?.destroy();
+  };
+
+  stopCurrentRun = stopRun;
+
+  device = await requestDevice(getRequiredDeviceLimits(pbfSimulationSchema) as GPUSupportedLimits);
+  if (stopped || activeRunId !== runId) {
+    device.destroy();
+    return;
+  }
+
   const simulationContext = createDispatchExecutionContext({
     params: {
       pbfIterations: PBF_SIMULATION_METADATA.pbfIterations,
     },
     reportError: (message) => console.error(message),
   });
-  const runner = new SimulationRunner({
+  runner = new SimulationRunner({
     schema: pbfSimulationSchema,
     device,
     context: simulationContext,
   });
   runner.initialize();
-
-  stopCurrentRun = () => {
-    stopped = true;
-    cancelAnimationFrame(animationFrame);
-    runner.dispose();
-  };
 
   const canvas: HTMLCanvasElement | null = document.querySelector("#liquid-bottle-canvas");
   if (!canvas) throw new Error("Canvas element not found.");
@@ -130,11 +253,82 @@ export async function run() {
 
   const positionsBuffer = runner.getBuffer("positions");
   if (!positionsBuffer) throw new Error('PBF buffer "positions" not found.');
+  const gridCountsBuffer = runner.getBuffer("gridCounts");
+  if (!gridCountsBuffer) throw new Error('PBF buffer "gridCounts" not found.');
+  const grid2ParticlesBuffer = runner.getBuffer("grid2Particles");
+  if (!grid2ParticlesBuffer) throw new Error('PBF buffer "grid2Particles" not found.');
+
+  const gridBindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      {
+        binding: 0,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: { type: "read-only-storage" },
+      },
+      {
+        binding: 1,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: { type: "storage" },
+      },
+      {
+        binding: 2,
+        visibility: GPUShaderStage.COMPUTE,
+        buffer: { type: "storage" },
+      },
+    ],
+  });
+  const gridBindGroup = device.createBindGroup({
+    layout: gridBindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: { buffer: positionsBuffer },
+      },
+      {
+        binding: 1,
+        resource: { buffer: gridCountsBuffer },
+      },
+      {
+        binding: 2,
+        resource: { buffer: grid2ParticlesBuffer },
+      },
+    ],
+  });
+  const gridShaderModule = device.createShaderModule({
+    code: gridShaders,
+  });
+  const gridPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [gridBindGroupLayout],
+  });
+  const clearGridPipeline = device.createComputePipeline({
+    layout: gridPipelineLayout,
+    compute: {
+      module: gridShaderModule,
+      entryPoint: "clear_grid",
+    },
+  });
+  const buildGridPipeline = device.createComputePipeline({
+    layout: gridPipelineLayout,
+    compute: {
+      module: gridShaderModule,
+      entryPoint: "build_grid",
+    },
+  });
 
   const surfaceBindGroupLayout = device.createBindGroupLayout({
     entries: [
       {
         binding: 0,
+        visibility: GPUShaderStage.FRAGMENT,
+        buffer: { type: "read-only-storage" },
+      },
+      {
+        binding: 1,
+        visibility: GPUShaderStage.FRAGMENT,
+        buffer: { type: "read-only-storage" },
+      },
+      {
+        binding: 2,
         visibility: GPUShaderStage.FRAGMENT,
         buffer: { type: "read-only-storage" },
       },
@@ -146,6 +340,14 @@ export async function run() {
       {
         binding: 0,
         resource: { buffer: positionsBuffer },
+      },
+      {
+        binding: 1,
+        resource: { buffer: gridCountsBuffer },
+      },
+      {
+        binding: 2,
+        resource: { buffer: grid2ParticlesBuffer },
       },
     ],
   });
@@ -176,11 +378,28 @@ export async function run() {
   });
 
   const clearColor = { r: 0.0, g: 0.5, b: 1.0, a: 1.0 };
+  if (!device || !runner) {
+    throw new Error("Failed to initialize liquid bottle renderer.");
+  }
+  const gpuDevice = device;
+  const simulationRunner = runner;
 
   function frame() {
-    if (stopped) return;
+    if (stopped || activeRunId !== runId) return;
 
-    const commandEncoder = device.createCommandEncoder();
+    const commandEncoder = gpuDevice.createCommandEncoder();
+    const simCommands = simulationRunner.step();
+
+    const gridPassEncoder = commandEncoder.beginComputePass();
+    gridPassEncoder.setBindGroup(0, gridBindGroup);
+    gridPassEncoder.setPipeline(clearGridPipeline);
+    gridPassEncoder.dispatchWorkgroups(
+      Math.ceil((PBF_GRID_WIDTH * PBF_GRID_HEIGHT) / PBF_WORKGROUP_SIZE),
+    );
+    gridPassEncoder.setPipeline(buildGridPipeline);
+    gridPassEncoder.dispatchWorkgroups(Math.ceil(PBF_NUM_PARTICLES / PBF_WORKGROUP_SIZE));
+    gridPassEncoder.end();
+
     const passEncoder = commandEncoder.beginRenderPass({
       colorAttachments: [
         {
@@ -197,7 +416,7 @@ export async function run() {
     passEncoder.draw(3, 1, 0, 0);
     passEncoder.end();
 
-    device.queue.submit([runner.step(), commandEncoder.finish()]);
+    gpuDevice.queue.submit([simCommands, commandEncoder.finish()]);
     animationFrame = requestAnimationFrame(frame);
   }
 
