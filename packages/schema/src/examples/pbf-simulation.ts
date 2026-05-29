@@ -238,11 +238,12 @@ export function createPbfInitialPositionsFromBoundaryProfile(
   overrides: Partial<PbfSimulationParams> = {},
 ): Float32Array {
   const params = resolvePbfSimulationParams(overrides);
-  const positions = new Float32Array(PBF_NUM_PARTICLES * 2);
+  const positions = createPbfInitialPositions(overrides);
   const cellCount = clampInt(profile.cellCount, 1, PBF_BOUNDARY_PROFILE_SAMPLE_COUNT);
   const minY = profile.minY;
   const maxY = profile.maxY;
-  const innerMargin = profile.innerMargin ?? params.particleRadiusInWorld;
+  const innerMargin =
+    (profile.innerMargin ?? params.particleRadiusInWorld) + params.particleRadiusInWorld;
   const verticalSpan = maxY - minY;
   const rowStride = cellCount > 1 ? verticalSpan / (cellCount - 1) : 0;
   const step = params.particleRadiusInWorld * 2.05;
@@ -267,10 +268,6 @@ export function createPbfInitialPositionsFromBoundaryProfile(
       positions[offset + 1] = y;
       particleIndex += 1;
     }
-  }
-
-  if (particleIndex === 0) {
-    return createPbfInitialPositions(overrides);
   }
 
   return positions;
@@ -790,7 +787,7 @@ ${sharedBindingsWGSL}
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= particleCount()) { return; }
-  positions.data[i] = positions.data[i] + positionDeltas.data[i];
+  positions.data[i] = confinePosition(positions.data[i] + positionDeltas.data[i]);
 }
 `,
 };

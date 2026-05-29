@@ -17,7 +17,9 @@ import {
   PBF_SIMULATION_METADATA,
   PBF_WORKGROUP_SIZE,
   createPbfInitialParticleState,
+  createPbfInitialParticleStateFromBoundaryProfile,
   createPbfInitialPositions,
+  createPbfInitialPositionsFromBoundaryProfile,
   createPbfInitialVelocities,
   packPbfSimulationParams,
 } from "../examples/pbf-simulation.ts";
@@ -192,6 +194,44 @@ describe("PBF Simulation Schema", () => {
     expect(Array.from(velocities)).toSatisfy((values: number[]) =>
       values.every((value: number) => value >= -2 && value <= 2),
     );
+  });
+
+  it("projects apply-delta positions back into the container", () => {
+    expect(schema.shaders["shader-apply-delta"].source).toContain(
+      "positions.data[i] = confinePosition(positions.data[i] + positionDeltas.data[i]);",
+    );
+  });
+
+  it("fills boundary-profile particles from a fallback layout when the profile is too small", () => {
+    const profile = {
+      cellCount: 2,
+      minY: 1,
+      maxY: 1.6,
+      innerMargin: 0.3,
+      left: [10, 10],
+      right: [10.2, 10.2],
+    };
+    const positions = createPbfInitialPositionsFromBoundaryProfile(profile, {
+      boundaryX: 20,
+      boundaryY: 10,
+      particleRadiusInWorld: 0.3,
+    });
+    const state = createPbfInitialParticleStateFromBoundaryProfile(profile, {
+      boundaryX: 20,
+      boundaryY: 10,
+      particleRadiusInWorld: 0.3,
+    });
+
+    expect(positions).toEqual(
+      createPbfInitialPositions({
+        boundaryX: 20,
+        boundaryY: 10,
+        particleRadiusInWorld: 0.3,
+      }),
+    );
+    expect(state.positions).toEqual(positions);
+    expect(state.oldPositions).toEqual(positions);
+    expect(Array.from(positions)).not.toContain(0);
   });
 
   it("packs simulation params into the exact WGSL float layout", () => {
